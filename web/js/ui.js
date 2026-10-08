@@ -1,0 +1,244 @@
+/* Small DOM helpers and shared form pieces (no framework, no build step). */
+import { t } from './i18n.js';
+
+// replaceChildren() that, like h(), skips null/false (so "cond ? el : null" never prints "null").
+if (typeof Element !== 'undefined' && !Element.prototype._dkPatched) {
+  const orig = Element.prototype.replaceChildren;
+  Element.prototype.replaceChildren = function (...kids) {
+    return orig.apply(this, kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false));
+  };
+  Element.prototype._dkPatched = true;
+}
+
+/** h('div', {class:'x', onclick: fn}, 'text', child, [children]) */
+export function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  if (attrs && (typeof attrs !== 'object' || attrs instanceof Node || Array.isArray(attrs))) {
+    kids.unshift(attrs); attrs = null;
+  }
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === undefined || v === null || v === false) continue;
+      if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+      else if (k === 'class') el.className = v;
+      else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+      else if (k === 'value') el.value = v;
+      else if (k === 'checked') el.checked = !!v;
+      else if (k === 'html') el.innerHTML = v;
+      else el.setAttribute(k, v === true ? '' : v);
+    }
+  }
+  append(el, kids);
+  return el;
+}
+
+function append(el, kids) {
+  for (const k of kids) {
+    if (k === null || k === undefined || k === false) continue;
+    if (Array.isArray(k)) append(el, k);
+    else el.appendChild(k instanceof Node ? k : document.createTextNode(String(k)));
+  }
+}
+
+export const $ = (sel, root = document) => root.querySelector(sel);
+
+/** Navigate to a screen, e.g. go('bill/S123'). Re-renders even when already there. */
+export function go(path) {
+  const target = '#/' + path;
+  if (location.hash === target) window.dispatchEvent(new HashChangeEvent('hashchange'));
+  else location.hash = target;
+}
+
+/* ---------- formatting ---------- */
+
+export const inr = (n, d = 0) => '₹' + Calc.inr(n, d);
+export const num = (v) => {
+  const n = parseFloat(String(v ?? '').replace(/,/g, ''));
+  return isNaN(n) ? 0 : n;
+};
+export const g3 = (n) => (Math.round(num(n) * 1000) / 1000).toFixed(3);
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+export function fdate(s) {
+  if (!s) return '';
+  const [y, m, d] = String(s).slice(0, 10).split('-');
+  return `${+d} ${MONTHS[+m - 1]} ${y}`;
+}
+export function todayStr() {
+  const d = new Date(Date.now() + 5.5 * 3600000);
+  return d.toISOString().slice(0, 10);
+}
+
+/* ---------- feedback ---------- */
+
+export function toast(msg, kind = 'ok') {
+  document.querySelectorAll('.toast').forEach((x) => x.remove());
+  const el = h('div', { class: 'toast ' + kind, role: 'status' }, msg);
+  document.body.appendChild(el);
+  setTimeout(() => el.classList.add('show'), 10);
+  setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, kind === 'err' ? 5000 : 2600);
+}
+
+/** Runs an async action with the button disabled and errors shown as a toast. */
+export async function busy(btn, fn) {
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = t('Please wait…'); }
+  try { return await fn(); }
+  catch (e) { toast(e.message || String(e), 'err'); return undefined; }
+  finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+}
+
+export function modal(title, body, actions = []) {
+  return new Promise((resolve) => {
+    const close = (v) => { wrap.remove(); resolve(v); };
+    const wrap = h('div', { class: 'modal-wrap', onclick: (e) => { if (e.target === wrap) close(null); } },
+      h('div', { class: 'modal', role: 'dialog', 'aria-label': title },
+        h('div', { class: 'modal-title' }, title),
+        h('div', { class: 'modal-body' }, body),
+        h('div', { class: 'modal-actions' },
+          h('button', { class: 'btn2', onclick: () => close(null) }, t('Cancel')),
+          actions.map((a) => h('button', { class: a.danger ? 'btn danger' : 'btn', onclick: () => close(a.value ?? true) }, a.label)))));
+    document.body.appendChild(wrap);
+  });
+}
+
+/** Asks for one or more values in a dialog. fields: [{key,label,type,value}] -> {key: value} or null */
+export async function ask(title, fields, okLabel) {
+  const inputs = fields.map((f) => {
+    if (f.options) {
+      const s = seg(f.options, f.value, null);
+      return { key: f.key, el: h('div', { class: 'f' }, h('span', { class: 'lbl' }, f.label), s), get: () => s.get() };
+    }
+    const el = field(f.label, { type: f.type, value: f.value });
+    return { key: f.key, el, get: () => el.input.value };
+  });
+  setTimeout(() => { const i = document.querySelector('.modal .inp'); if (i) i.focus(); }, 50);
+  const ok = await modal(title, h('div', { class: 'stack' }, inputs.map((i) => i.el)), [{ label: okLabel || t('Save'), value: true }]);
+  if (!ok) return null;
+  const out = {};
+  inputs.forEach((i) => { out[i.key] = i.get(); });
+  return out;
+}
+
+export const confirmBox = (title, text, okLabel) =>
+  modal(title, h('p', text), [{ label: okLabel || t('Yes'), value: true }]);
+
+/* ---------- layout pieces ---------- */
+
+export function topbar(title, sub, opts = {}) {
+  return h('header', { class: 'top' },
+    h('a', { class: 'back', href: opts.back || '#/home', 'aria-label': t('Back') }, icon('back')),
+    h('div', { class: 'top-text' }, h('div', { class: 'top-title' }, title), sub ? h('div', { class: 'top-sub' }, sub) : null),
+    opts.right || null);
+}
+
+export function screen(title, sub, body, foot, opts) {
+  return h('div', { class: 'screen' }, topbar(title, sub, opts),
+    h('main', { class: 'body' }, body),
+    foot ? h('footer', { class: 'foot' }, foot) : null);
+}
+
+export const sec = (text) => h('div', { class: 'sec' }, text);
+export const card = (...kids) => h('div', { class: 'card' }, ...kids);
+export const kv = (a, b, cls) => h('div', { class: 'kv ' + (cls || '') }, h('span', a), h('span', b));
+export const grid = (n, ...kids) => h('div', { class: 'grid g' + n }, ...kids);
+
+/** Labelled input. type: text|num|tel|date|textarea */
+export function field(label, opts = {}) {
+  const attrs = {
+    class: 'inp', value: opts.value ?? '', placeholder: opts.placeholder || '',
+    oninput: opts.oninput, onchange: opts.onchange, readonly: opts.readonly, id: opts.id
+  };
+  let input;
+  if (opts.type === 'textarea') input = h('textarea', Object.assign(attrs, { rows: opts.rows || 2 }));
+  else {
+    if (opts.type === 'num') Object.assign(attrs, { inputmode: 'decimal', type: 'text', autocomplete: 'off' });
+    else if (opts.type === 'tel') Object.assign(attrs, { inputmode: 'tel', type: 'tel', autocomplete: 'off' });
+    else if (opts.type === 'date') attrs.type = 'date';
+    else if (opts.type === 'pin') Object.assign(attrs, { inputmode: 'numeric', type: 'password', autocomplete: 'current-password' });
+    else attrs.type = 'text';
+    input = h('input', attrs);
+  }
+  const wrap = h('label', { class: 'f' + (opts.cls ? ' ' + opts.cls : '') }, h('span', { class: 'lbl' }, label), input);
+  wrap.input = input;
+  return wrap;
+}
+
+/** Big tap buttons instead of drop-downs. options: [{value,label}] */
+export function seg(options, value, onpick) {
+  const el = h('div', { class: 'seg', role: 'group' });
+  let current = value;
+  const draw = () => {
+    el.innerHTML = '';
+    options.forEach((o) => {
+      el.appendChild(h('button', {
+        type: 'button', class: o.value === current ? 'on' : '', 'aria-pressed': o.value === current ? 'true' : 'false',
+        onclick: () => { current = o.value; draw(); onpick && onpick(o.value); }
+      }, o.label));
+    });
+  };
+  draw();
+  el.get = () => current;
+  el.set = (v) => { current = v; draw(); };
+  return el;
+}
+
+export function chips(list, onpick, cls) {
+  return h('div', { class: 'chips ' + (cls || '') },
+    list.map((c) => h('button', { type: 'button', class: 'chip' + (c.on ? ' on' : ''), onclick: () => onpick(c.value ?? c.label) }, c.label)));
+}
+
+/** Date row that shows today by default and only opens a picker when tapped. */
+export function dateField(label, value) {
+  const f = field(label, { type: 'date', value: value || todayStr() });
+  return f;
+}
+
+export function empty(text) { return h('div', { class: 'empty' }, text); }
+
+export function loading() { return h('div', { class: 'loading' }, h('span', { class: 'spinner' }), t('Loading…')); }
+
+/* ---------- icons (inline stroke svg) ---------- */
+const ICONS = {
+  back: 'M15 18l-6-6 6-6',
+  search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-3.5-3.5',
+  lock: 'M5 10h14v11H5zM8 10V7a4 4 0 0 1 8 0v3',
+  bill: 'M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6',
+  swap: 'M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3M18 3v4h-4M6 21v-4h4',
+  order: 'M5 4h14v17H5zM9 4h6v3H9zM9 12h6M9 16h4',
+  box: 'M3 7l9-4 9 4-9 4zM3 7v10l9 4 9-4V7M12 11v10',
+  chart: 'M4 20h16M7 16v-5M12 16V6M17 16v-8',
+  wrench: 'M14 6a4 4 0 0 0 5 5l-9 9-3-3 9-9a4 4 0 0 0-2-2z',
+  flame: 'M12 3c3 4 6 6 6 11a6 6 0 0 1-12 0c0-3 2-5 3-7 1 2 2 3 3 3 0-3-1-5 0-7z',
+  truck: 'M3 6h11v10H3zM14 10h4l3 3v3h-7M7 19a2 2 0 1 0 0-.1M17 19a2 2 0 1 0 0-.1',
+  hammer: 'M14 4l6 6-3 3-6-6zM11 7l-8 8 3 3 8-8',
+  gear: 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1',
+  cash: 'M3 7h18v10H3zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+  wa: 'M21 12a9 9 0 0 1-13.2 7.9L3 21l1.2-4.6A9 9 0 1 1 21 12z',
+  print: 'M7 8V3h10v5M7 17H4v-7h16v7h-3M7 14h10v7H7z',
+  pdf: 'M12 4v11M7 10l5 5 5-5M5 20h14',
+  phone: 'M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2',
+  check: 'M5 12l5 5 9-10',
+  plus: 'M12 5v14M5 12h14',
+  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
+  logout: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
+  camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 10a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z'
+};
+export function icon(name, size = 22) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('width', size); svg.setAttribute('height', size); svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none'); svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '1.8');
+  svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round'); svg.setAttribute('aria-hidden', 'true');
+  const p = document.createElementNS(ns, 'path');
+  p.setAttribute('d', ICONS[name] || ''); svg.appendChild(p);
+  return svg;
+}
+
+/* ---------- remembered values (last making ₹/g, last rate %, ...) ---------- */
+export function remember(key, val) {
+  try {
+    if (val === undefined) return localStorage.getItem('dk_last_' + key) || '';
+    localStorage.setItem('dk_last_' + key, String(val));
+  } catch (e) { /* ignore */ }
+  return '';
+}
