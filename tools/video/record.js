@@ -45,6 +45,8 @@ async function record(browser, name, title, endText, fn) {
     recordVideo: { dir: TMP, size: { width: 720, height: 1440 } }
   });
   const page = await ctx.newPage();
+  const t0 = Date.now();
+  const cues = []; // when Munim ji starts each line: the phone reads these aloud in Hindi while the video plays
   // The stage is served from the app's own address so the app inside can use its storage.
   await page.route(BASE + '/__stage', (r) => r.fulfill({ contentType: 'text/html', body: STAGE }));
   await page.goto(BASE + '/__stage');
@@ -67,11 +69,12 @@ async function record(browser, name, title, endText, fn) {
     page, app, frame,
     go: async (hash) => { frame = page.frames().find((f) => f !== page.mainFrame()); await frame.evaluate((h) => { location.hash = h; }, hash); await page.waitForTimeout(900); },
     say: async (text, extra = 0) => {
+      cues.push({ t: Math.round((Date.now() - t0) / 100) / 10, text });
       await page.evaluate((s) => {
         document.getElementById('say').textContent = s;
         document.querySelector('.munim').classList.add('talking');
       }, text);
-      const ms = Math.max(2600, text.length * 75) + extra;
+      const ms = Math.max(3200, text.length * 95) + extra;
       await page.waitForTimeout(Math.min(ms, 1800));
       await page.evaluate(() => document.querySelector('.munim').classList.remove('talking'));
       await page.waitForTimeout(Math.max(ms - 1800, 0));
@@ -114,6 +117,7 @@ async function record(browser, name, title, endText, fn) {
   execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-ss', '3', '-i', mp4, '-frames:v', '1', '-vf', 'scale=360:-1', '-q:v', '5',
     path.join(OUT, name + '.jpg')]);
   fs.unlinkSync(webm);
+  fs.writeFileSync(path.join(OUT, name + '.json'), JSON.stringify(cues));
   console.log('  ✓ ' + name + ' (' + Math.round(fs.statSync(mp4).size / 1024) + ' KB)');
 }
 
