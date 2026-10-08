@@ -1,0 +1,10 @@
+{
+  "name": "dukankaapp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Free jewellery shop app (girvi, billing, stock, old gold) on Google Sheets",
+  "scripts": {
+    "build": "node tools/build.js",
+    "test": "node tools/build.js && node tests/calc.test.js && node tests/backend.test.js"
+  }
+}
