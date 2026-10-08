@@ -1,14 +1,14 @@
 /* Cash book: opening, money in/out for a day, add expense. */
 import { call } from '../api.js';
 import { S, isOwner, isViewer } from '../state.js';
-import { h, screen, field, busy, toast, inr, fdate, go, empty, ask } from '../ui.js';
+import { h, screen, field, busy, toast, inr, fdate, go, empty, ask, confirmBox } from '../ui.js';
 import { t } from '../i18n.js';
 
 const CAT = {
   'sale': 'Sale', 'sale-cancel': 'Bill cancelled', 'old-gold': 'Old gold bought', 'girvi-given': 'Girvi given',
   'girvi-interest': 'Girvi interest', 'girvi-received': 'Girvi payment', 'order-advance': 'Order payment',
   'order-refund': 'Order refund', 'repair-charge': 'Repair charge', 'repair-cost': 'Repair cost', 'melting': 'Melting charge',
-  'wholesaler': 'Wholesaler', 'karigar-labour': 'Karigar labour', 'expense': 'Expense', 'other-income': 'Other income', 'udhaar': 'Udhaar received'
+  'wholesaler': 'Wholesaler', 'karigar-labour': 'Karigar labour', 'expense': 'Expense', 'other-income': 'Other income', 'udhaar': 'Baki received', 'girvi-cancel': 'Girvi correction'
 };
 
 export async function render(params, query) {
@@ -29,6 +29,10 @@ export async function render(params, query) {
     if (!v) return;
     await busy(null, async () => { await call('cash.opening', v); toast('Opening cash saved'); go('cash?d=' + date); });
   };
+  const removeEntry = async (e) => {
+    if (!await confirmBox(t('Remove this entry?'), (e.notes || '') + ' · ' + inr(e.amount), t('Remove'))) return;
+    await busy(null, async () => { await call('cash.void', { id: e.id }); toast('Removed'); go('cash?d=' + date); });
+  };
   return screen(t('Cash book'), fdate(date), [
     day,
     h('div', { class: 'card' },
@@ -44,6 +48,8 @@ export async function render(params, query) {
     h('div', { class: 'sec' }, 'ENTRIES'),
     c.entries.length ? c.entries.map((e) => h('div', { class: 'row-card' },
       h('div', { class: 'kv' }, h('b', null, CAT[e.category] || e.category), h('b', { class: e.dir === 'in' ? 'good' : 'bad' }, (e.dir === 'in' ? '+ ' : '− ') + inr(e.amount))),
-      h('div', { class: 'kv muted' }, h('span', null, (e.notes || '') + ' · ' + e.mode), h('span', null, e.by + ' ' + String(e.at).slice(11, 16))))) : empty('No entries this day')
+      h('div', { class: 'kv muted' }, h('span', null, (e.notes || '') + ' · ' + e.mode), h('span', null, e.by + ' ' + String(e.at).slice(11, 16))),
+      isOwner() && e.refType === 'manual' ? h('button', { class: 'link', onclick: () => removeEntry(e) }, t('Remove (wrong entry)')) : null)) : empty('No entries this day'),
+    h('div', { class: 'hint' }, t('Bills, girvi, orders and repairs are corrected from their own screens. Only expenses / other income are removed here.'))
   ]);
 }

@@ -1,7 +1,7 @@
 /* Girvi: list, new loan, view / release with month-by-month interest. */
 import { call } from '../api.js';
-import { S, setting, purityFor, isViewer } from '../state.js';
-import { h, screen, field, card, grid, seg, busy, toast, num, inr, fdate, g3, sec, go, empty, remember, todayStr, chips, ask } from '../ui.js';
+import { S, setting, purityFor, isViewer, isOwner } from '../state.js';
+import { h, screen, field, card, grid, seg, busy, toast, num, inr, fdate, g3, sec, go, empty, remember, todayStr, chips, ask, confirmBox } from '../ui.js';
 import { customerPicker } from '../picker.js';
 import { receiptHtml, docActions } from '../bill.js';
 import { t } from '../i18n.js';
@@ -119,8 +119,15 @@ export async function view({ id }, query) {
       { key: 'mode', label: 'Paid by', options: [{ value: 'cash', label: 'Cash' }, { value: 'upi', label: 'UPI' }], value: 'cash' },
       { key: 'date', label: t('Date'), type: 'date', value: asOf }]);
     if (!v) return;
+    let restToBaki = false;
+    if (type === 'close' && num(v.amount) < st.totalDue - 1) {
+      const rest = Math.round(st.totalDue - num(v.amount));
+      if (!await confirmBox(t('Less than full amount'), t('Customer is paying') + ' ' + inr(num(v.amount)) + '. ' +
+        t('Give the item back and put the remaining') + ' ' + inr(rest) + ' ' + t('in Baki (dues)?'), t('Yes, put in Baki'))) return;
+      restToBaki = true;
+    }
     await busy(null, async () => {
-      await call('loans.pay', { loanId: id, type, amount: v.amount, mode: v.mode, date: v.date });
+      await call('loans.pay', { loanId: id, type, amount: v.amount, mode: v.mode, date: v.date, restToBaki });
       toast(type === 'close' ? 'Girvi released' : 'Saved');
       go('loan/' + id + (type === 'close' ? '' : '?on=' + v.date));
     });
@@ -141,7 +148,40 @@ export async function view({ id }, query) {
       h('button', { class: 'btn2 small', onclick: pay('interest') }, 'Interest only'),
       h('button', { class: 'btn2 small', onclick: pay('part') }, 'Part pay'),
       h('button', { class: 'btn2 small', onclick: pay('topup') }, 'Extra loan')) : null,
-    actions
+    actions,
+    isOwner() ? ownerTools(l, open) : null
   ], open ? [h('div', { class: 'kv foot-total' }, h('span', { class: 'muted' }, t('Take from customer')), h('span', { class: 'big' }, inr(st.totalDue))),
     isViewer() ? null : h('button', { class: 'btn', onclick: pay('close') }, 'Release & send receipt')] : null, { back: '#/loans' });
+}
+
+/** Owner only: fix a wrong entry. */
+function ownerTools(l, open) {
+  const id = l.id;
+  const edit = async () => {
+    const v = await ask(t('Correct this girvi'), [
+      { key: 'item', label: t('Item'), type: 'text', value: l.item },
+      { key: 'grossWt', label: 'Gross weight (g)', type: 'num', value: String(l.grossWt) },
+      { key: 'netWt', label: 'Net weight (g)', type: 'num', value: String(l.netWt) },
+      { key: 'purityPct', label: t('Purity %'), type: 'num', value: String(l.purityPct || '') },
+      { key: 'ratePct', label: t('Interest ₹ per 100 / month'), type: 'num', value: String(l.ratePct) },
+      ...(l.txns.length ? [] : [{ key: 'principal', label: t('Loan amount (₹)'), type: 'num', value: String(l.principal) },
+        { key: 'date', label: t('Date'), type: 'date', value: l.date }])]);
+    if (v) await busy(null, async () => { await call('loans.edit', Object.assign({ id }, v)); toast('Saved'); go('loan/' + id); });
+  };
+  const undo = async () => {
+    const last = l.txns[l.txns.length - 1];
+    if (!await confirmBox(t('Undo last payment'), fdate(last.date) + ' · ' + last.type + ' · ' + inr(last.amount) + '. ' +
+      t('The money entry is also taken out of the cash book.'), t('Undo'))) return;
+    await busy(null, async () => { await call('loans.undoLast', { id }); toast('Undone'); go('loan/' + id); });
+  };
+  const cancel = async () => {
+    const v = await ask(t('Cancel this girvi (entered by mistake)'), [{ key: 'reason', label: t('Reason'), type: 'text', value: '' }], t('Cancel girvi'));
+    if (v) await busy(null, async () => { await call('loans.void', { id, reason: v.reason }); toast('Girvi cancelled'); go('loans', { replace: true }); });
+  };
+  return card(h('div', { class: 'sec' }, t('Owner: correct a mistake')),
+    h('div', { class: 'row-actions' },
+      open ? h('button', { class: 'btn2 small', onclick: edit }, t('Edit details')) : null,
+      l.txns.length ? h('button', { class: 'btn2 small', onclick: undo }, t('Undo last payment')) : null,
+      open && !l.txns.length ? h('button', { class: 'btn2 small danger', onclick: cancel }, t('Cancel girvi')) : null),
+    h('div', { class: 'hint' }, t('Amount and date can be changed only before any payment. Undo the payments first.')));
 }

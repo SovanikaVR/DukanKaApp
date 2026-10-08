@@ -24,7 +24,7 @@ export async function render(params, query) {
   const gstRow = h('div', { class: 'grid g3' }, gstPct, h('div', { class: 'gst-amt' }));
   const cash = field(t('Cash'), { type: 'num', value: '', oninput: () => { cashTouched = true; recalc(); } });
   const upi = field(t('UPI'), { type: 'num', readonly: true });
-  const udhaar = field(t('Udhaar'), { type: 'num', value: '0', oninput: () => recalc() });
+  const udhaar = field(t('Baki'), { type: 'num', value: '0', oninput: () => recalc() });
   let cashTouched = false;
   const totalLabel = h('span', { class: 'muted' });
   const totalValue = h('span', { class: 'big' });
@@ -52,11 +52,11 @@ export async function render(params, query) {
     const invoiceTotal = Math.round(subtotal + tax);
     const oldValue = olds.reduce((a, o) => a + o.amount(), 0);
     const net = invoiceTotal - oldValue;
-    if (!cashTouched) cash.input.value = net > 0 ? String(net) : '';
+    if (!cashTouched) cash.input.value = net > 0 ? String(Math.max(net - num(udhaar.input.value), 0)) : '';
     const rest = Math.abs(net) - num(cash.input.value) - (net > 0 ? num(udhaar.input.value) : 0);
     upi.input.value = String(Math.round(rest * 100) / 100);
-    payNote.textContent = net >= 0 ? 'PAYMENT · ' + inr(net) + ' to collect' : 'OLD GOLD IS MORE · pay ' + inr(-net) + ' to customer';
-    totalLabel.textContent = (isGst ? 'GST bill' : 'Estimate') + (net >= 0 ? ' · customer pays' : ' · shop pays');
+    payNote.textContent = net >= 0 ? t('PAYMENT') + ' · ' + inr(net) + ' ' + t('to collect') : t('OLD GOLD IS MORE · pay') + ' ' + inr(-net) + ' ' + t('to customer');
+    totalLabel.textContent = t(isGst ? 'GST bill' : 'Estimate') + t(net >= 0 ? ' · customer pays' : ' · shop pays');
     totalValue.textContent = inr(Math.abs(net));
     totalsBox.replaceChildren(
       h('div', { class: 'kv' }, h('span', null, 'Items'), h('span', null, inr(subtotal, 2))),
@@ -89,17 +89,18 @@ export async function render(params, query) {
       sec('ITEMS · every value can be changed'), names, linesBox,
       h('div', { class: 'grid g2' }, h('button', { class: 'add', type: 'button', onclick: () => addLine() }, '+ Add item'), fromStock),
       gstRow,
-      sec(t('Old gold taken in') + ' · right here, no separate entry'), oldBox,
+      sec(t('Old gold taken in') + ' · ' + t('right here, no separate entry')), oldBox,
       h('button', { class: 'add gold', type: 'button', onclick: addOld }, '+ Add old gold / silver'),
       totalsBox, payNote, grid(3, cash, upi, udhaar),
-      h('div', { class: 'hint' }, 'UPI fills itself with the rest. Put any unpaid amount in Udhaar.')],
+      h('div', { class: 'hint' }, t('Items typed by hand do not change stock. To sell a stock item, use "From stock".')),
+      h('div', { class: 'hint' }, 'UPI fills itself with the rest. Put any unpaid amount in Baki — it shows in the Baki list until paid.')],
     [h('div', { class: 'kv foot-total' }, totalLabel, totalValue), save]);
 }
 
 /** One bill line. */
 function lineEditor(pref, onchange, onremove) {
   let karat = pref.karat || remember('sale_karat') || '22K';
-  const name = field(t('Item') + ' name', { value: pref.name || '' });
+  const name = field(t('Item name'), { value: pref.name || '' });
   name.input.setAttribute('list', 'item-names');
   let saveName = false;
   const saveBtn = h('button', { type: 'button', class: 'save-name', onclick: () => {
@@ -113,14 +114,18 @@ function lineEditor(pref, onchange, onremove) {
     karat = v; purity.input.value = purityFor(v) || (v === 'Silver' ? '100' : ''); rate.input.value = rateFor(v); onchange();
   });
   const total = h('div', { class: 'kv strong' });
-  const tag = pref.itemId ? h('div', { class: 'hint' }, 'From stock: ' + (pref.tag || '') + (pref.name ? ' · ' + pref.name : '')) : null;
+  const isLot = pref.itemId && pref.lotPieces > 1;
+  const pieces = isLot ? field(t('Pieces sold'), { type: 'num', value: '1', hint: t('Lot in stock') + ': ' + pref.lotPieces + ' pcs · ' + g3(pref.lotWt) + ' g' }) : null;
+  const tag = pref.itemId ? h('div', { class: 'hint' }, t('From stock') + ': ' + (pref.tag || '') + (pref.name ? ' · ' + pref.name : '') +
+    ' · ' + t(isLot ? 'only the weight and pieces sold leave stock' : 'leaves stock when the bill is saved')) : null;
   const el = h('div', { class: 'card' },
     h('div', { class: 'line-top' }, name, saveBtn, h('button', { type: 'button', class: 'x', 'aria-label': 'Remove item', onclick: onremove }, '×')),
     tag,
     h('div', { class: 'karat-row' }, kseg, purity),
     grid(3, weight, rate, making),
+    pieces,
     total);
-  if (pref.itemId) weight.input.readOnly = true;
+  if (pref.itemId && !isLot) weight.input.readOnly = true;
   const amount = () => {
     const w = num(weight.input.value);
     try { return Math.round(Calc.evalFormula(setting('formula_sale_line'), { Weight: w, Rate: num(rate.input.value), Making: num(making.input.value) }) * 100) / 100; }
@@ -129,12 +134,13 @@ function lineEditor(pref, onchange, onremove) {
   const obj = {
     el, amount,
     get: () => ({ itemId: pref.itemId || '', name: name.input.value.trim() || 'Item', metal: karat === 'Silver' ? 'silver' : 'gold',
-      purityPct: purity.input.value, weight: weight.input.value, rate: rate.input.value, makingPerG: making.input.value, saveName }),
+      purityPct: purity.input.value, weight: weight.input.value, rate: rate.input.value, makingPerG: making.input.value, saveName,
+      pieces: pieces ? pieces.input.value : undefined }),
     rememberValues: () => { remember('making', making.input.value); remember('sale_karat', karat); }
   };
   const draw = () => {
     const w = num(weight.input.value);
-    total.replaceChildren(h('span', null, 'Gold ' + inr(w * num(rate.input.value)) + ' + making ' + inr(w * num(making.input.value))), h('span', null, inr(amount(), 2)));
+    total.replaceChildren(h('span', null, t('Gold') + ' ' + inr(w * num(rate.input.value)) + ' + ' + t('making') + ' ' + inr(w * num(making.input.value))), h('span', null, inr(amount(), 2)));
   };
   [weight, rate, making].forEach((f) => f.input.addEventListener('input', draw));
   draw();
@@ -146,7 +152,7 @@ export function oldEditor(onchange, onremove) {
   let metal = 'gold';
   const item = field('Old item', { value: '' });
   const weight = field(t('Weight (g)'), { type: 'num', oninput: onchange });
-  const cut = field(t('Customer cut %') + ' (on bill)', { type: 'num', value: setting('standard_cut_pct', '20'), oninput: onchange });
+  const cut = field(t('Customer cut %') + ' ' + t('(on bill)'), { type: 'num', value: setting('standard_cut_pct', '20'), oninput: onchange });
   const rate = field('24K rate ₹/g', { type: 'num', value: rateFor('24K'), oninput: onchange });
   const pur = field(t('Our purity estimate %'), { type: 'num', value: setting('standard_purity_pct', '80'), oninput: onchange });
   const mseg = seg([{ value: 'gold', label: 'Gold' }, { value: 'silver', label: 'Silver' }], metal, (v) => {
@@ -169,7 +175,7 @@ export function oldEditor(onchange, onremove) {
   };
   const draw = () => {
     const c = calc();
-    custLine.replaceChildren(h('span', null, 'Customer gets for ' + g3(c.cf) + ' g fine'), h('span', null, '− ' + inr(Math.round(c.amt))));
+    custLine.replaceChildren(h('span', null, t('Customer gets for') + ' ' + g3(c.cf) + ' g ' + t('fine')), h('span', null, '− ' + inr(Math.round(c.amt))));
     const m = c.of - c.cf;
     ourLine.replaceChildren(h('div', null, 'Our fine: ', h('b', null, g3(c.of) + ' g')),
       h('div', { class: m >= 0 ? 'good' : 'bad' }, 'Margin: ' + (m >= 0 ? '+' : '') + g3(m) + ' g · ' + inr(m * num(rate.input.value))));
@@ -203,6 +209,8 @@ async function pickFromStock(addLine) {
   const ok = await modal('Pick from stock', h('div', { class: 'stack' }, q, results), [{ label: 'Use', value: true }]);
   if (!ok || !chosen) return;
   const karat = chosen.metal === 'silver' ? 'Silver' : (chosen.purityPct >= 99 ? '24K' : chosen.purityPct >= 90 ? '22K' : '18K');
-  addLine({ itemId: chosen.id, tag: chosen.tag, name: chosen.name, weight: chosen.netWt, purityPct: chosen.purityPct,
+  const lot = chosen.pieces > 1;
+  addLine({ itemId: chosen.id, tag: chosen.tag, name: chosen.name, weight: lot ? '' : chosen.netWt, purityPct: chosen.purityPct,
+    lotPieces: chosen.pieces, lotWt: chosen.netWt,
     karat, makingPerG: chosen.makingPerG || undefined });
 }

@@ -1,7 +1,7 @@
 /* Repair / polish: karigar cost vs customer charge = repair profit. */
 import { call } from '../api.js';
-import { S, isViewer } from '../state.js';
-import { h, screen, field, card, grid, seg, busy, toast, num, inr, fdate, g3, sec, go, empty, chips, ask } from '../ui.js';
+import { S, isViewer, isOwner } from '../state.js';
+import { h, screen, field, card, grid, seg, busy, toast, num, inr, fdate, g3, sec, go, empty, chips, ask, confirmBox } from '../ui.js';
 import { customerPicker } from '../picker.js';
 import { receiptHtml, docActions } from '../bill.js';
 import { t } from '../i18n.js';
@@ -78,9 +78,23 @@ export async function view({ id }, query) {
     if (v) run(() => call('repairs.return', Object.assign({ id }, v)));
   };
   const give = async () => {
-    const v = await ask('Give back to customer', [{ key: 'custCharge', label: 'Charge collected (₹)', type: 'num', value: String(r.estCustCharge) },
+    const v = await ask('Give back to customer', [{ key: 'custCharge', label: t('Charge (₹)'), type: 'num', value: String(r.estCustCharge) },
+      { key: 'amount', label: t('Amount received now (₹)'), type: 'num', value: String(r.estCustCharge) },
       { key: 'mode', label: 'Paid by', options: [{ value: 'cash', label: 'Cash' }, { value: 'upi', label: 'UPI' }], value: 'cash' }], 'Given back');
-    if (v) run(() => call('repairs.deliver', Object.assign({ id }, v)));
+    if (!v) return;
+    const charge = num(v.custCharge), got = num(v.amount);
+    if (got > charge + 1) { toast(t('Amount received is more than the charge'), 'err'); return; }
+    if (got < charge - 1 && !await confirmBox(t('Less than charge'), inr(charge - got) + ' ' + t('will be added to Baki (dues) for this customer.'), t('OK'))) return;
+    run(() => call('repairs.deliver', Object.assign({ id }, v)));
+  };
+  const edit = async () => {
+    const v = await ask(t('Correct this repair'), [
+      { key: 'item', label: t('Item'), type: 'text', value: r.item },
+      { key: 'wtIn', label: 'Weight in (g)', type: 'num', value: String(r.wtIn) },
+      { key: 'karigarRate', label: 'Karigar ' + (r.karigarRateType === 'fixed' ? '₹' : '₹/g'), type: 'num', value: String(r.karigarRate) },
+      { key: 'custRate', label: 'Customer ' + (r.custRateType === 'fixed' ? '₹' : '₹/g'), type: 'num', value: String(r.custRate) },
+      { key: 'deliveryDate', label: t('Delivery date'), type: 'date', value: r.deliveryDate || '' }]);
+    if (v) run(() => call('repairs.edit', Object.assign({ id }, v)));
   };
   const loss = r.wtOut ? r.wtIn - r.wtOut : 0;
   return screen(r.work + ': ' + r.item, r.customerName + ' · ' + STATUS[r.status], [
@@ -92,6 +106,8 @@ export async function view({ id }, query) {
       h('div', { class: 'kv strong good' }, h('span', null, 'Repair profit'), h('span', null, inr((r.custCharge || r.estCustCharge) - (r.karigarCost || r.estKarigarCost))))),
     r.status !== 'delivered' && r.status !== 'ready' && !isViewer() ? h('button', { class: 'btn2', onclick: back }, 'Back from karigar') : null,
     docActions(doc, { filename: 'repair-' + r.customerName.replace(/\s+/g, '-') + '.pdf', mobile: r.mobile,
-      text: `${shop.name}\n${r.work}: ${r.item} (${g3(r.wtIn)} g)\nCharge: ₹${Calc.inr(r.custCharge || r.estCustCharge)}` + (r.deliveryDate ? `\nReady on: ${fdate(r.deliveryDate)}` : '') })
+      text: `${shop.name}\n${r.work}: ${r.item} (${g3(r.wtIn)} g)\nCharge: ₹${Calc.inr(r.custCharge || r.estCustCharge)}` + (r.deliveryDate ? `\nReady on: ${fdate(r.deliveryDate)}` : '') }),
+    isOwner() && r.status !== 'delivered' ? card(h('div', { class: 'sec' }, t('Owner: correct a mistake')),
+      h('div', { class: 'row-actions' }, h('button', { class: 'btn2 small', onclick: edit }, t('Edit details')))) : null
   ], r.status !== 'delivered' && !isViewer() ? h('button', { class: 'btn', onclick: give }, 'Give back & collect charge') : null, { back: '#/repairs' });
 }

@@ -10,7 +10,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.0.0';
+var APP_VERSION = '1.1.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -28,7 +28,7 @@ var SCHEMA = {
   Loans: ['id', 'date', 'customerId', 'customerName', 'mobile', 'item', 'metal', 'purityPct',
     'grossWt', 'netWt', 'principal', 'ratePct', 'formula', 'minDays', 'status', 'closedAt',
     'notes', 'by', 'at'],
-  LoanTxns: ['id', 'loanId', 'date', 'type', 'amount', 'interestPart', 'principalPart', 'mode', 'by', 'at'],
+  LoanTxns: ['id', 'loanId', 'date', 'type', 'amount', 'interestPart', 'principalPart', 'mode', 'by', 'at', 'status'],
   Orders: ['id', 'date', 'customerId', 'customerName', 'mobile', 'item', 'metal', 'purityPct',
     'estWt', 'makingPerG', 'karigarPerG', 'method', 'rate', 'fixedTotal', 'deliveryDate', 'status',
     'karigarId', 'finalWt', 'finalTotal', 'deliveredAt', 'notes', 'by', 'at'],
@@ -41,7 +41,8 @@ var SCHEMA = {
   FineLedger: ['id', 'date', 'type', 'grams', 'value', 'refType', 'refId', 'notes', 'by', 'at'],
   Parties: ['id', 'type', 'name', 'mobile', 'notes', 'active', 'createdAt'],
   PartyLedger: ['id', 'partyId', 'date', 'type', 'goldG', 'cash', 'rate', 'refType', 'refId', 'notes', 'by', 'at'],
-  Cash: ['id', 'date', 'dir', 'mode', 'amount', 'category', 'refType', 'refId', 'notes', 'by', 'at'],
+  Cash: ['id', 'date', 'dir', 'mode', 'amount', 'category', 'refType', 'refId', 'notes', 'by', 'at', 'status'],
+  Dues: ['id', 'date', 'customerId', 'customerName', 'mobile', 'amount', 'refType', 'refId', 'notes', 'by', 'at'],
   Audit: ['at', 'user', 'action', 'ref', 'details']
 };
 
@@ -82,7 +83,8 @@ var DEFAULT_SETTINGS = {
 /** Actions only the owner may call. */
 var OWNER_ONLY = {
   'settings.save': 1, 'users.list': 1, 'users.save': 1, 'sale.void': 1, 'cash.opening': 1,
-  'reports.profit': 1, 'admin.archive': 1, 'admin.backupNow': 1
+  'reports.profit': 1, 'admin.archive': 1, 'admin.backupNow': 1, 'loans.edit': 1, 'loans.void': 1,
+  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'stock.update': 1, 'dues.adjust': 1
 };
 
 /* ===== 01_util.js ===== */
@@ -107,9 +109,19 @@ function sheet_(name) {
     sh.getRange('A:' + colLetter_(headers.length)).setNumberFormat('@');
     sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
     sh.setFrozenRows(1);
+  } else if (!_headerChecked[name]) {
+    // Newer app versions add columns at the end: write the full header row once.
+    var headers2 = SCHEMA[name];
+    var cur = sh.getRange(1, 1, 1, headers2.length).getValues()[0];
+    if (String(cur[headers2.length - 1]) !== headers2[headers2.length - 1]) {
+      sh.getRange(1, 1, 1, headers2.length).setValues([headers2]).setFontWeight('bold');
+      sh.getRange('A:' + colLetter_(headers2.length)).setNumberFormat('@');
+    }
   }
+  _headerChecked[name] = true;
   return sh;
 }
+var _headerChecked = {};
 
 function colLetter_(n) {
   var s = '';
@@ -140,6 +152,8 @@ function rows_(name) {
       out.push(o);
     }
   }
+  // Cancelled cash entries and loan payments stay in the sheet for history but count nowhere.
+  if (name === 'Cash' || name === 'LoanTxns') out = out.filter(function (o) { return o.status !== 'void'; });
   _rowsCache[name] = out;
   return out;
 }
@@ -230,6 +244,13 @@ function validDate_(s) {
 }
 
 function req_(cond, msg) { if (!cond) throw new Error(msg); }
+
+/** Money / weight typed in a form: blank = 0, negative is refused. */
+function pos_(v, label) {
+  var n = num_(v);
+  req_(n >= 0, (label || 'Amount') + ' cannot be negative');
+  return n;
+}
 
 /* ---------- Settings ---------- */
 
@@ -482,6 +503,16 @@ var ROUTES = {
   'reports.daily': function (u, d) { return reportDaily_(d.date); },
   'reports.month': function (u, d) { return reportMonth_(d.month); },
   'reports.position': function () { return reportPosition_(); },
+  'dues.list': function (u, d) { return duesList_(d); },
+  'dues.pay': function (u, d) { return duesPay_(u, d); },
+  'dues.adjust': function (u, d) { return duesAdjust_(u, d); },
+  'loans.edit': function (u, d) { return loanEdit_(u, d); },
+  'loans.void': function (u, d) { return loanVoid_(u, d); },
+  'loans.undoLast': function (u, d) { return loanUndoLast_(u, d); },
+  'orders.edit': function (u, d) { return orderEdit_(u, d); },
+  'repairs.edit': function (u, d) { return repairEdit_(u, d); },
+  'cash.void': function (u, d) { return cashVoid_(u, d); },
+  'home.summary': function () { return homeSummary_(); },
   'admin.archive': function (u, d) { return archiveFy_(u, d.fy); },
   'admin.backupNow': function () { return backupNow_(); }
 };
@@ -491,7 +522,7 @@ var READ_ONLY = {
   'sale.get': 1, 'oldgold.list': 1, 'loans.list': 1, 'loans.get': 1, 'orders.list': 1, 'orders.get': 1,
   'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'melt.list': 1, 'fine.summary': 1,
   'parties.list': 1, 'parties.ledger': 1, 'cash.list': 1, 'reports.daily': 1, 'reports.month': 1,
-  'reports.position': 1, 'users.list': 1
+  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1
 };
 
 function handle_(action, token, data) {
@@ -503,10 +534,26 @@ function handle_(action, token, data) {
   if (OWNER_ONLY[action]) req_(user.role === 'owner', 'Only the owner can do this');
   if (user.role === 'viewer') req_(READ_ONLY[action] || action === 'auth.logout', 'View-only users cannot change data');
   if (READ_ONLY[action]) return fn(user, data, token);
+  // Every save from the app carries a request id (_rid). If the same save arrives twice
+  // (double tap, slow network, retry), the first result is returned and nothing is saved again.
+  var rid = data && data._rid ? 'rid_' + String(data._rid).slice(0, 60) : '';
+  var cache = rid ? CacheService.getScriptCache() : null;
   var lock = LockService.getScriptLock();
   lock.waitLock(25000);
   try {
-    return fn(user, data, token);
+    if (cache) {
+      var prev = cache.get(rid);
+      if (prev) return json_(prev, {});
+    }
+    migrateDues_();
+    var result = fn(user, data, token);
+    if (cache) {
+      try {
+        var str = JSON.stringify(result === undefined ? {} : result);
+        if (str.length < 90000) cache.put(rid, str, 21600);
+      } catch (e) { /* cache full or too large: skip */ }
+    }
+    return result;
   } finally {
     SpreadsheetApp.flush();
     lock.releaseLock();
@@ -701,17 +748,6 @@ function countBy_(list, key) {
   return m;
 }
 
-function customerUdhaar_(customerId) {
-  var due = 0;
-  rows_('Sales').forEach(function (s) {
-    if (s.customerId === customerId && s.status !== 'void') due += num_(s.udhaar);
-  });
-  rows_('Cash').forEach(function (c) {
-    if (c.refType === 'udhaar' && c.refId === customerId) due -= num_(c.amount);
-  });
-  return round2_(due);
-}
-
 function customerGet_(id) {
   var c = find_('Customers', id);
   req_(c, 'Customer not found');
@@ -792,18 +828,29 @@ function saleCreate_(user, d) {
       req_(item, 'Stock item not found');
       req_(item.status === 'in', 'Item ' + (item.tag || item.name) + ' is not in stock');
     }
-    var w = num_(l.weight), rate = num_(l.rate), mk = num_(l.makingPerG);
+    var w = pos_(l.weight, 'Weight'), rate = pos_(l.rate, 'Rate'), mk = pos_(l.makingPerG, 'Making');
+    pos_(l.amount, 'Amount');
     var amount = l.amount !== undefined && l.amount !== '' && !w ? num_(l.amount)
       : round2_(Calc.evalFormula(saleFormula, { Weight: w, Rate: rate, Making: mk }));
     subtotal += amount;
-    var cost = item ? num_(item.costTotal) : 0;
+    // A lot (many pieces / loose weight) can be sold in part: only what was sold leaves stock.
+    var part = null;
+    if (item) {
+      var lotWt = num_(item.netWt), lotPcs = num_(item.pieces) || 1;
+      var soldWt = w > 0 ? Math.min(w, lotWt) : lotWt;
+      var soldPcs = lotPcs > 1 ? Math.max(1, Math.round(num_(l.pieces) || 1)) : 1;
+      req_(soldPcs <= lotPcs, 'Only ' + lotPcs + ' pieces left in ' + (item.tag || item.name));
+      if (soldWt < lotWt - 0.0005 || soldPcs < lotPcs) part = { wt: round3_(soldWt), pcs: soldPcs,
+        cost: round2_(num_(item.costTotal) * soldWt / (lotWt || 1)) };
+    }
+    var cost = item ? (part ? part.cost : num_(item.costTotal)) : 0;
     costTotal += cost;
     if (l.saveName && l.name) namesToSave.push(l.name);
     return {
       itemId: l.itemId || '', tag: item ? item.tag : '', name: String(l.name || (item && item.name) || 'Item'),
       metal: l.metal || (item && item.metal) || 'gold', purityPct: num_(l.purityPct || (item && item.purityPct)),
       huid: String(l.huid || ''), weight: round3_(w), rate: rate, makingPerG: mk,
-      metalValue: round2_(w * rate), making: round2_(w * mk), amount: amount, cost: cost
+      metalValue: round2_(w * rate), making: round2_(w * mk), amount: amount, cost: cost, part: part
     };
   });
   subtotal = round2_(subtotal);
@@ -816,7 +863,8 @@ function saleCreate_(user, d) {
   var oldValue = old.reduce(function (a, g) { return a + g.amount; }, 0);
   var net = invoiceTotal - oldValue;
 
-  var cash = round2_(d.cash), upi = round2_(d.upi), udhaar = round2_(d.udhaar);
+  var cash = round2_(pos_(d.cash, 'Cash')), upi = round2_(pos_(d.upi, 'UPI')), udhaar = round2_(pos_(d.udhaar, 'Baki'));
+  req_(!(net < 0 && udhaar), 'Baki is not possible when we pay the customer');
   if (net >= 0) {
     req_(Math.abs(cash + upi + udhaar - net) < 1, 'Cash + UPI + Udhaar should add up to ₹' + net);
   } else {
@@ -836,8 +884,19 @@ function saleCreate_(user, d) {
   };
   insert_('Sales', bill);
   cleanLines.forEach(function (l) {
-    if (l.itemId) update_('Items', l.itemId, { status: 'sold', soldBillId: id });
+    if (!l.itemId) return;
+    if (l.part) {
+      var it = find_('Items', l.itemId);
+      var left = round3_(num_(it.netWt) - l.part.wt);
+      var pcsLeft = (num_(it.pieces) || 1) - l.part.pcs;
+      update_('Items', l.itemId, {
+        netWt: Math.max(left, 0), grossWt: round3_(Math.max(0, num_(it.grossWt) - l.part.wt)), pieces: Math.max(pcsLeft, 0),
+        costTotal: round2_(num_(it.costTotal) - l.part.cost),
+        status: left <= 0.0005 || pcsLeft <= 0 ? 'sold' : 'in', soldBillId: id
+      });
+    } else update_('Items', l.itemId, { status: 'sold', soldBillId: id });
   });
+  if (udhaar > 0) duesAdd_(user, c, udhaar, 'sale', id, 'Bill ' + billNo, date);
   old.forEach(function (g) {
     insert_('OldGold', {
       id: uid_('G'), date: date, customerId: c.id, customerName: customerName_(c), source: 'sale', billId: id,
@@ -922,8 +981,19 @@ function saleVoid_(user, d) {
   req_(b.status !== 'void', 'Bill is already cancelled');
   update_('Sales', b.id, { status: 'void' });
   json_(b.lines, []).forEach(function (l) {
-    if (l.itemId) update_('Items', l.itemId, { status: 'in', soldBillId: '' });
+    if (!l.itemId) return;
+    var it = find_('Items', l.itemId);
+    if (!it) return;
+    if (l.part) {
+      update_('Items', l.itemId, { status: 'in', netWt: round3_(num_(it.netWt) + l.part.wt),
+        grossWt: round3_(num_(it.grossWt) + l.part.wt), pieces: num_(it.pieces) + l.part.pcs,
+        costTotal: round2_(num_(it.costTotal) + l.part.cost) });
+    } else update_('Items', l.itemId, { status: 'in', soldBillId: '' });
   });
+  if (num_(b.udhaar) > 0) {
+    var cust = find_('Customers', b.customerId);
+    if (cust) duesAdd_(user, cust, -num_(b.udhaar), 'sale-cancel', b.id, 'Cancelled ' + b.billNo);
+  }
   rows_('OldGold').filter(function (g) { return g.billId === b.id; }).forEach(function (g) {
     req_(g.status !== 'melted', 'Old gold from this bill is already melted; cannot cancel');
     update_('OldGold', g.id, { status: 'void' });
@@ -936,15 +1006,7 @@ function saleVoid_(user, d) {
   return { ok: true };
 }
 
-function salePayUdhaar_(user, d) {
-  var c = find_('Customers', d.customerId);
-  req_(c, 'Customer not found');
-  var amt = round2_(d.amount);
-  req_(amt > 0, 'Enter the amount');
-  cash_(user, 'in', d.mode === 'upi' ? 'upi' : 'cash', amt, 'udhaar', 'udhaar', c.id, customerName_(c), d.date);
-  audit_(user, 'udhaar.pay', c.id, { amount: amt });
-  return { udhaar: customerUdhaar_(c.id) };
-}
+function salePayUdhaar_(user, d) { return duesPay_(user, d); }
 
 /* ---------- Old gold bought for cash ---------- */
 
@@ -1006,7 +1068,8 @@ function loanTxns_(loanId) {
 
 function loanCreate_(user, d) {
   var c = ensureCustomer_(user, d);
-  var principal = round2_(d.principal);
+  var principal = round2_(pos_(d.principal, 'Loan amount'));
+  pos_(d.grossWt, 'Weight'); pos_(d.netWt, 'Weight'); pos_(d.ratePct, 'Interest rate');
   req_(principal > 0, 'Enter the loan amount');
   var rate = d.ratePct === '' || d.ratePct === undefined ? num_(settings_().interest_default_rate) : num_(d.ratePct);
   req_(rate >= 0, 'Enter the interest rate');
@@ -1087,24 +1150,30 @@ function loanPay_(user, d) {
   req_(date >= l.date, 'Date is before the loan date');
   var txns = loanTxns_(l.id);
   var before = Calc.loanStatement(l, txns, date, loanOpts_());
-  var amt = round2_(d.amount);
-  if (type === 'close' && !amt) amt = before.totalDue;
-  req_(amt > 0, 'Enter the amount');
+  var amt = round2_(pos_(d.amount, 'Amount'));
+  if (type === 'close' && !amt && !d.restToBaki) amt = before.totalDue;
+  req_(amt > 0 || (type === 'close' && d.restToBaki), 'Enter the amount');
   var interestPart = 0, principalPart = 0;
   if (type === 'interest') interestPart = amt;
   else if (type === 'part' || type === 'close') {
     interestPart = Math.min(amt, Math.max(before.interestDue, 0));
     principalPart = amt - interestPart;
   }
+  var rest = 0;
   if (type === 'close') {
-    req_(amt >= before.totalDue - 1, 'To close, collect the full ₹' + before.totalDue);
+    req_(amt <= before.totalDue + 1, 'Total due is only ₹' + before.totalDue);
+    rest = Math.round(before.totalDue - amt);
+    req_(rest < 1 || d.restToBaki, 'To close, collect the full ₹' + before.totalDue + ' (or tick "rest to Baki")');
+  } else if (type === 'part' || type === 'interest') {
+    req_(amt <= before.totalDue + 1, 'Total due is only ₹' + before.totalDue + '. Use "Release" to close.');
   }
   var tx = {
     id: uid_('T'), loanId: l.id, date: date, type: type, amount: amt,
     interestPart: round2_(interestPart), principalPart: round2_(principalPart),
     mode: d.mode === 'upi' ? 'upi' : 'cash', by: user.username, at: nowIso_()
   };
-  insert_('LoanTxns', tx);
+  if (amt > 0) insert_('LoanTxns', tx);
+  if (rest >= 1) duesAdd_(user, find_('Customers', l.customerId), rest, 'loan', l.id, 'Girvi released, balance', date);
   if (type === 'topup') {
     cash_(user, 'out', tx.mode, amt, 'girvi-given', 'loan', l.id, l.customerName + ' (top-up)', date);
   } else {
@@ -1148,7 +1217,8 @@ function orderSummary_(o) {
 function orderCreate_(user, d) {
   var c = ensureCustomer_(user, d);
   var method = d.method === 'B' ? 'B' : 'A';
-  var estWt = round3_(d.estWt);
+  var estWt = round3_(pos_(d.estWt, 'Weight'));
+  pos_(d.advance, 'Advance'); pos_(d.makingPerG, 'Making'); pos_(d.karigarPerG, 'Karigar labour'); pos_(d.rate, 'Rate');
   req_(estWt > 0, 'Enter the approximate weight');
   var making = num_(d.makingPerG);
   var rate = method === 'A' ? num_(d.rate) : 0;
@@ -1205,8 +1275,10 @@ function orderPay_(user, d) {
     patch.fixedTotal = orderTotalFor_(num_(o.estWt), patch.rate, num_(o.makingPerG));
   }
   if (d.deliveryDate) patch.deliveryDate = d.deliveryDate;
+  var amt = round2_(pos_(d.amount, 'Amount'));
+  pos_(d.fixRate, 'Rate');
+  req_(amt > 0 || Object.keys(patch).length, 'Enter the amount received');
   if (Object.keys(patch).length) update_('Orders', o.id, patch);
-  var amt = round2_(d.amount);
   if (amt > 0) addOrderPayment_(user, o, amt, d.mode, d.date);
   audit_(user, 'order.pay', o.id, { amount: amt, fixRate: patch.rate || '' });
   return orderGet_(o.id);
@@ -1239,7 +1311,9 @@ function orderStatus_(user, d) {
       });
     }
   } else if (d.status === 'cancelled') {
-    var refund = round2_(d.refund);
+    var refund = round2_(pos_(d.refund, 'Refund'));
+    var paidSoFar = orderPayments_(o.id).reduce(function (a, p) { return a + p.amount; }, 0);
+    req_(refund <= paidSoFar + 1, 'Customer paid only ₹' + Math.round(paidSoFar));
     if (refund > 0) cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', refund, 'order-refund', 'order', o.id, o.customerName, date);
   } else {
     req_(d.status === 'booked', 'Unknown status');
@@ -1253,21 +1327,31 @@ function orderDeliver_(user, d) {
   var o = find_('Orders', d.orderId);
   req_(o, 'Order not found');
   req_(o.status !== 'delivered' && o.status !== 'cancelled', 'Order is closed');
-  var finalWt = round3_(d.finalWt || o.finalWt || o.estWt);
-  var rate = num_(o.rate) || num_(d.rate);
+  var finalWt = round3_(pos_(d.finalWt, 'Weight') || o.finalWt || o.estWt);
+  var rate = num_(o.rate) || pos_(d.rate, 'Rate');
   req_(rate > 0, 'Enter today\'s rate to work out the price');
   var total = orderTotalFor_(finalWt, rate, num_(o.makingPerG));
   var paid = orderPayments_(o.id).reduce(function (a, p) { return a + p.amount; }, 0);
   var balance = total - paid;
-  var amt = round2_(d.amount);
-  req_(Math.abs(amt - balance) < 1 || (balance <= 0 && amt === 0), 'Collect the balance ₹' + Math.round(balance));
+  var amt = round2_(pos_(d.amount, 'Amount'));
   var date = validDate_(d.date);
+  var due = 0;
+  if (balance > 0) {
+    req_(amt <= balance + 1, 'Balance is only ₹' + Math.round(balance));
+    due = Math.round(balance - amt);
+  } else {
+    req_(amt === 0, 'Customer has already paid more than the price. Nothing to collect.');
+  }
   if (amt > 0) addOrderPayment_(user, o, amt, d.mode, date);
+  if (due >= 1) {
+    var cust = find_('Customers', o.customerId);
+    duesAdd_(user, cust, due, 'order', o.id, 'Order: ' + o.item, date);
+  }
   if (balance < 0) cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', -balance, 'order-refund', 'order', o.id, 'Extra advance returned', date);
   update_('Orders', o.id, {
     status: 'delivered', finalWt: finalWt, finalTotal: total, rate: rate, deliveredAt: date
   });
-  audit_(user, 'order.deliver', o.id, { total: total, balance: balance });
+  audit_(user, 'order.deliver', o.id, { total: total, balance: balance, due: due });
   return orderGet_(o.id);
 }
 
@@ -1291,10 +1375,10 @@ function repairCreate_(user, d) {
   var c = ensureCustomer_(user, d);
   var rec = {
     id: uid_('W'), date: validDate_(d.date), customerId: c.id, customerName: customerName_(c), mobile: c.mobile,
-    item: String(d.item || 'Item').trim(), work: d.work || 'polish', wtIn: round3_(d.wtIn),
+    item: String(d.item || 'Item').trim(), work: d.work || 'polish', wtIn: round3_(pos_(d.wtIn, 'Weight')),
     karigarId: d.karigarId || '', karigarRateType: d.karigarRateType === 'fixed' ? 'fixed' : 'perg',
     karigarRate: num_(d.karigarRate), custRateType: d.custRateType === 'fixed' ? 'fixed' : 'perg',
-    custRate: num_(d.custRate), deliveryDate: d.deliveryDate || '',
+    custRate: pos_(d.custRate, 'Charge'), deliveryDate: d.deliveryDate || '',
     status: d.karigarId ? 'with_karigar' : 'received', wtOut: '', karigarCost: '', custCharge: '',
     returnedAt: '', deliveredAt: '', notes: String(d.notes || ''), by: user.username, at: nowIso_()
   };
@@ -1315,7 +1399,8 @@ function repairsList_(d) {
 function repairReturn_(user, d) {
   var r = find_('Repairs', d.id);
   req_(r, 'Repair not found');
-  var cost = d.karigarCost !== undefined && d.karigarCost !== '' ? round2_(d.karigarCost)
+  req_(r.status !== 'delivered', 'Already given back');
+  var cost = d.karigarCost !== undefined && d.karigarCost !== '' ? round2_(pos_(d.karigarCost, 'Karigar cost'))
     : repairAmount_(r.karigarRateType, r.karigarRate, r.wtIn);
   var date = validDate_(d.date);
   var kid = d.karigarId || r.karigarId;
@@ -1339,10 +1424,14 @@ function repairDeliver_(user, d) {
   var r = find_('Repairs', d.id);
   req_(r, 'Repair not found');
   req_(r.status !== 'delivered', 'Already given back');
-  var charge = d.custCharge !== undefined && d.custCharge !== '' ? round2_(d.custCharge)
+  var charge = d.custCharge !== undefined && d.custCharge !== '' ? round2_(pos_(d.custCharge, 'Charge'))
     : repairAmount_(r.custRateType, r.custRate, r.wtIn);
   var date = validDate_(d.date);
-  cash_(user, 'in', d.mode === 'upi' ? 'upi' : 'cash', charge, 'repair-charge', 'repair', r.id, r.customerName, date);
+  // The customer may pay less now; the rest goes to Baki (dues).
+  var got = d.amount !== undefined && d.amount !== '' ? round2_(pos_(d.amount, 'Amount')) : charge;
+  req_(got <= charge + 1, 'Charge is only ₹' + Math.round(charge));
+  cash_(user, 'in', d.mode === 'upi' ? 'upi' : 'cash', got, 'repair-charge', 'repair', r.id, r.customerName, date);
+  if (charge - got >= 1) duesAdd_(user, find_('Customers', r.customerId), Math.round(charge - got), 'repair', r.id, 'Repair: ' + r.item, date);
   var patch = { status: 'delivered', custCharge: charge, deliveredAt: date };
   if (!r.returnedAt) {
     patch.returnedAt = date;
@@ -1436,9 +1525,11 @@ function stockUpdate_(user, d) {
   var i = find_('Items', d.id);
   req_(i, 'Item not found');
   var patch = {};
-  ['tag', 'name', 'category', 'metal', 'purityPct', 'grossWt', 'netWt', 'pieces', 'makingPerG', 'costTotal'].forEach(function (k) {
-    if (d[k] !== undefined) patch[k] = d[k];
+  ['tag', 'name', 'category', 'metal'].forEach(function (k) { if (d[k] !== undefined) patch[k] = String(d[k]); });
+  ['purityPct', 'grossWt', 'netWt', 'pieces', 'makingPerG', 'costTotal'].forEach(function (k) {
+    if (d[k] !== undefined && d[k] !== '') patch[k] = pos_(d[k], k);
   });
+  req_(i.status === 'in' || d.status, 'This item is already sold');
   if (d.status) {
     req_(['in', 'removed'].indexOf(d.status) >= 0, 'Bad status');
     patch.status = d.status;
@@ -1596,7 +1687,7 @@ function partyEntry_(user, d) {
   var p = find_('Parties', d.partyId);
   req_(p, 'Not found');
   var date = validDate_(d.date);
-  var g = round3_(d.goldG), c = round2_(d.cash), rate = num_(d.rate);
+  var g = round3_(pos_(d.goldG, 'Grams')), c = round2_(pos_(d.cash, 'Amount')), rate = pos_(d.rate, 'Rate');
   var mode = d.mode === 'upi' ? 'upi' : 'cash';
   var e = { id: uid_('Y'), partyId: p.id, date: date, type: d.type, goldG: 0, cash: 0, rate: '',
     refType: d.refType || '', refId: d.refId || '', notes: String(d.notes || ''), by: user.username, at: nowIso_() };
@@ -1674,7 +1765,7 @@ function cashList_(d) {
 }
 
 function cashAdd_(user, d) {
-  var amt = round2_(d.amount);
+  var amt = round2_(pos_(d.amount, 'Amount'));
   req_(amt > 0, 'Enter the amount');
   var dir = d.dir === 'in' ? 'in' : 'out';
   var rec = cash_(user, dir, d.mode === 'upi' ? 'upi' : 'cash', amt, dir === 'out' ? 'expense' : 'other-income',
@@ -1848,6 +1939,206 @@ function reportHtml_(date) {
     row('Old gold not melted', Calc.inr(p.fine.oldGold.weight, 3) + ' g') +
     row('Fine gold in hand', Calc.inr(p.fine.inHand, 3) + ' g') +
     row('Gold with karigars', Calc.inr(p.karigars.goldG, 3) + ' g') + '</table></div>';
+}
+
+/* ===== 16_dues_edits.js ===== */
+/* ---------- Dues (baki): every customer who still owes money, in one place ---------- */
+
+/** Positive amount = customer owes us more; negative = customer paid back. */
+function duesAdd_(user, c, amount, refType, refId, notes, date) {
+  amount = round2_(amount);
+  if (!amount) return null;
+  return insert_('Dues', {
+    id: uid_('D'), date: validDate_(date), customerId: c.id, customerName: customerName_(c), mobile: c.mobile,
+    amount: amount, refType: refType || '', refId: refId || '', notes: notes || '', by: user ? user.username : '', at: nowIso_()
+  });
+}
+
+function customerUdhaar_(customerId) {
+  var due = 0;
+  rows_('Dues').forEach(function (d) { if (d.customerId === customerId) due += num_(d.amount); });
+  return round2_(due);
+}
+
+function duesList_(d) {
+  var by = {};
+  rows_('Dues').forEach(function (x) {
+    var r = by[x.customerId] || (by[x.customerId] = { customerId: x.customerId, customerName: x.customerName, mobile: x.mobile,
+      due: 0, since: x.date, last: x.date, items: [] });
+    r.due = round2_(r.due + num_(x.amount));
+    if (x.date < r.since) r.since = x.date;
+    if (x.date > r.last) r.last = x.date;
+    r.items.push({ id: x.id, date: x.date, amount: num_(x.amount), refType: x.refType, refId: x.refId, notes: x.notes });
+  });
+  var q = String(d.q || '').toLowerCase();
+  var list = Object.keys(by).map(function (k) { return by[k]; }).filter(function (r) {
+    if (r.due <= 0.5) return false;
+    return !q || (r.customerName + ' ' + r.mobile).toLowerCase().indexOf(q) >= 0;
+  });
+  list.forEach(function (r) {
+    var c = find_('Customers', r.customerId);
+    if (c) { r.customerName = customerName_(c); r.mobile = c.mobile; r.village = c.village; }
+    r.items = r.items.slice(-10).reverse();
+  });
+  list.sort(function (a, b) { return a.since < b.since ? -1 : 1; });
+  return { list: list, total: Math.round(list.reduce(function (a, r) { return a + r.due; }, 0)), count: list.length };
+}
+
+function duesPay_(user, d) {
+  var c = find_('Customers', d.customerId);
+  req_(c, 'Customer not found');
+  var amt = round2_(d.amount);
+  req_(amt > 0, 'Enter the amount received');
+  var due = customerUdhaar_(c.id);
+  req_(amt <= due + 1, 'Customer owes only ₹' + Math.round(due));
+  var date = validDate_(d.date);
+  duesAdd_(user, c, -amt, 'payment', '', d.notes || 'Received', date);
+  cash_(user, 'in', d.mode === 'upi' ? 'upi' : 'cash', amt, 'udhaar', 'udhaar', c.id, customerName_(c), date);
+  audit_(user, 'dues.pay', c.id, { amount: amt });
+  return { udhaar: customerUdhaar_(c.id) };
+}
+
+/** Owner: write off or correct a balance without money moving (e.g. discount given). */
+function duesAdjust_(user, d) {
+  var c = find_('Customers', d.customerId);
+  req_(c, 'Customer not found');
+  var amt = round2_(d.amount);
+  req_(amt !== 0, 'Enter the amount');
+  duesAdd_(user, c, amt, 'adjust', '', d.notes || (amt < 0 ? 'Written off' : 'Added'), d.date);
+  audit_(user, 'dues.adjust', c.id, { amount: amt, notes: d.notes || '' });
+  return { udhaar: customerUdhaar_(c.id) };
+}
+
+/* ---------- Correcting old records (owner) ---------- */
+
+function loanEdit_(user, d) {
+  var l = find_('Loans', d.id);
+  req_(l, 'Loan not found');
+  req_(l.status === 'open', 'Only an open loan can be edited');
+  var patch = {};
+  ['item', 'metal', 'notes'].forEach(function (k) { if (d[k] !== undefined) patch[k] = String(d[k]); });
+  ['purityPct', 'grossWt', 'netWt', 'ratePct'].forEach(function (k) {
+    if (d[k] !== undefined && d[k] !== '') { req_(num_(d[k]) >= 0, 'Values cannot be negative'); patch[k] = num_(d[k]); }
+  });
+  var hasTx = loanTxns_(l.id).length > 0;
+  if (d.date && d.date !== l.date) { req_(!hasTx, 'Date cannot change after payments; cancel the payments first'); patch.date = validDate_(d.date); }
+  if (d.principal !== undefined && d.principal !== '' && num_(d.principal) !== num_(l.principal)) {
+    req_(!hasTx, 'Amount cannot change after payments; cancel the payments first');
+    var np = round2_(d.principal);
+    req_(np > 0, 'Enter the loan amount');
+    var diff = np - num_(l.principal);
+    cash_(user, diff > 0 ? 'out' : 'in', 'cash', Math.abs(diff), 'girvi-given', 'loan', l.id, 'Correction: ' + l.customerName, l.date);
+    patch.principal = np;
+  }
+  update_('Loans', l.id, patch);
+  audit_(user, 'loan.edit', l.id, patch);
+  return loanGet_(l.id);
+}
+
+/** Cancels a loan entered by mistake: money given is taken back into the cash book. */
+function loanVoid_(user, d) {
+  var l = find_('Loans', d.id);
+  req_(l, 'Loan not found');
+  req_(l.status === 'open', 'Only an open loan can be cancelled');
+  req_(loanTxns_(l.id).length === 0, 'Cancel the payments on this loan first');
+  update_('Loans', l.id, { status: 'void', closedAt: today_(), notes: (l.notes ? l.notes + ' · ' : '') + 'Cancelled: ' + (d.reason || '') });
+  cash_(user, 'in', 'cash', num_(l.principal), 'girvi-cancel', 'loan', l.id, 'Cancelled entry: ' + l.customerName);
+  audit_(user, 'loan.void', l.id, { reason: d.reason || '' });
+  return { ok: true };
+}
+
+/** Undo the latest payment / top-up / release on a loan (wrong amount typed, etc.). */
+function loanUndoLast_(user, d) {
+  var l = find_('Loans', d.id);
+  req_(l, 'Loan not found');
+  var txs = rows_('LoanTxns').filter(function (t) { return t.loanId === l.id && t.status !== 'void'; });
+  req_(txs.length, 'No payment to undo');
+  var t = txs[txs.length - 1];
+  update_('LoanTxns', t.id, { status: 'void' });
+  var amt = num_(t.amount);
+  if (t.type === 'topup') cash_(user, 'in', t.mode, amt, 'girvi-cancel', 'loan', l.id, 'Undo top-up: ' + l.customerName);
+  else cash_(user, 'out', t.mode, amt, 'girvi-cancel', 'loan', l.id, 'Undo payment: ' + l.customerName);
+  if (t.type === 'close') update_('Loans', l.id, { status: 'open', closedAt: '' });
+  audit_(user, 'loan.undo', l.id, { txn: t.id, type: t.type, amount: amt });
+  return loanGet_(l.id);
+}
+
+function orderEdit_(user, d) {
+  var o = find_('Orders', d.id);
+  req_(o, 'Order not found');
+  req_(o.status !== 'delivered' && o.status !== 'cancelled', 'Order is closed');
+  var patch = {};
+  ['item', 'notes', 'deliveryDate', 'metal'].forEach(function (k) { if (d[k] !== undefined) patch[k] = String(d[k]); });
+  ['purityPct', 'estWt', 'makingPerG', 'karigarPerG'].forEach(function (k) {
+    if (d[k] !== undefined && d[k] !== '') { req_(num_(d[k]) >= 0, 'Values cannot be negative'); patch[k] = num_(d[k]); }
+  });
+  if (d.rate !== undefined && d.rate !== '' && num_(o.rate) > 0) { req_(num_(d.rate) > 0, 'Enter the rate'); patch.rate = num_(d.rate); }
+  var w = patch.estWt !== undefined ? patch.estWt : num_(o.estWt);
+  var r = patch.rate !== undefined ? patch.rate : num_(o.rate);
+  var m = patch.makingPerG !== undefined ? patch.makingPerG : num_(o.makingPerG);
+  if (r > 0) patch.fixedTotal = orderTotalFor_(w, r, m);
+  update_('Orders', o.id, patch);
+  audit_(user, 'order.edit', o.id, patch);
+  return orderGet_(o.id);
+}
+
+function repairEdit_(user, d) {
+  var r = find_('Repairs', d.id);
+  req_(r, 'Repair not found');
+  req_(r.status !== 'delivered', 'Already given back');
+  var patch = {};
+  ['item', 'work', 'notes', 'deliveryDate'].forEach(function (k) { if (d[k] !== undefined) patch[k] = String(d[k]); });
+  ['wtIn', 'karigarRate', 'custRate'].forEach(function (k) {
+    if (d[k] !== undefined && d[k] !== '') { req_(num_(d[k]) >= 0, 'Values cannot be negative'); patch[k] = num_(d[k]); }
+  });
+  var saved = update_('Repairs', r.id, patch);
+  audit_(user, 'repair.edit', r.id, patch);
+  return repairOut_(saved);
+}
+
+/** Reverses a manual cash entry (expense / other income) typed by mistake. */
+function cashVoid_(user, d) {
+  var c = find_('Cash', d.id);
+  req_(c, 'Entry not found');
+  req_(c.refType === 'manual', 'Only expenses / other income can be removed here. Undo the bill, loan or order instead.');
+  req_(c.status !== 'void', 'Already removed');
+  update_('Cash', c.id, { status: 'void' });
+  audit_(user, 'cash.void', c.id, { amount: c.amount, notes: c.notes });
+  return { ok: true };
+}
+
+/* ---------- Light summary for the home screen ---------- */
+
+function homeSummary_() {
+  var t = today_();
+  var yearAgo = String(parseInt(t.slice(0, 4), 10) - 1) + t.slice(4);
+  var orders = rows_('Orders').filter(function (o) { return o.status !== 'delivered' && o.status !== 'cancelled'; });
+  var dues = duesList_({});
+  return {
+    ordersDueToday: orders.filter(function (o) { return o.deliveryDate === t; }).length,
+    ordersLate: orders.filter(function (o) { return o.deliveryDate && o.deliveryDate < t; }).length,
+    loansOld: rows_('Loans').filter(function (l) { return l.status === 'open' && l.date <= yearAgo; }).length,
+    loansOpen: rows_('Loans').filter(function (l) { return l.status === 'open'; }).length,
+    ordersPending: orders.length,
+    repairsReady: rows_('Repairs').filter(function (r) { return r.status === 'ready'; }).length,
+    duesCount: dues.count, duesTotal: dues.total
+  };
+}
+
+/** v1.0 kept udhaar only on bills. Copy it into the Dues tab once (runs on the first save after updating). */
+function migrateDues_() {
+  if (settings_().dues_v === '1') return;
+  rows_('Sales').forEach(function (s) {
+    if (s.status === 'void' || num_(s.udhaar) <= 0) return;
+    var c = find_('Customers', s.customerId);
+    if (c) duesAdd_(null, c, num_(s.udhaar), 'sale', s.id, 'Bill ' + s.billNo, s.date);
+  });
+  rows_('Cash').forEach(function (x) {
+    if (x.refType !== 'udhaar') return;
+    var c = find_('Customers', x.refId);
+    if (c) duesAdd_(null, c, -num_(x.amount), 'payment', '', 'Received', x.date);
+  });
+  setSetting_('dues_v', '1');
 }
 
 /* ===== 20_setup.js ===== */

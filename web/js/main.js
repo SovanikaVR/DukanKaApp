@@ -1,6 +1,6 @@
 /* DukanKaApp — router and app shell. */
 import { apiUrl, token, onSessionExpired } from './api.js';
-import { S, refresh, modOn, isOwner } from './state.js';
+import { S, refresh, modOn, isOwner, loadCached, clearCached } from './state.js';
 import { h, icon, toast, loading, go } from './ui.js';
 import { t, setLang, getLang } from './i18n.js';
 
@@ -35,7 +35,10 @@ const ROUTES = [
   ['party/:id', () => import('./screens/parties.js'), 'view'],
   ['cash', () => import('./screens/cash.js'), 'render'],
   ['reports', () => import('./screens/reports.js'), 'render'],
-  ['settings', () => import('./screens/settings.js'), 'render']
+  ['settings', () => import('./screens/settings.js'), 'render'],
+  ['dues', () => import('./screens/dues.js'), 'render'],
+  ['help', () => import('./screens/help.js'), 'index'],
+  ['help/:topic', () => import('./screens/help.js'), 'topic']
 ];
 
 function match(path) {
@@ -62,8 +65,17 @@ async function render() {
   if (!apiUrl() && path !== 'connect') return go('connect');
   if (apiUrl() && !token() && path !== 'login' && path !== 'connect') return go('login');
   if (token() && !S.user && path !== 'login' && path !== 'connect') {
-    app.replaceChildren(loading());
-    try { await refresh(); } catch (e) { if (seq === renderSeq) { toast(e.message, 'err'); go('login'); } return; }
+    if (loadCached()) {
+      // Open at once with the saved copy; fresh settings and rate arrive in the background.
+      refresh().then(() => { if (path === 'home' && seq === renderSeq) render(); }).catch((e) => toast(e.message, 'err'));
+    } else {
+      app.replaceChildren(loading());
+      try { await refresh(); } catch (e) {
+        if (seq !== renderSeq) return;
+        if (!token()) return go('login');
+        return showError(e, null);
+      }
+    }
   }
   const m = match(path) || match('home');
   currentParams = m.params;
@@ -78,17 +90,32 @@ async function render() {
     if (first) first.focus();
   } catch (e) {
     if (seq !== renderSeq) return;
-    console.error(e);
-    app.replaceChildren(shell(h('div', { class: 'screen' }, h('main', { class: 'body' },
-      h('div', { class: 'error-box' }, e.message || String(e)),
-      h('a', { class: 'btn', href: '#/home' }, t('Back')))), m.name));
+    showError(e, m.name);
   }
 }
+
+/** Something failed while opening a screen: say it simply and offer Try again. */
+function showError(e, name) {
+  console.error(e);
+  let msg = e && e.message ? e.message : String(e);
+  if (/undefined|null|is not a function|reading/i.test(msg)) msg = 'Could not open this screen. Please try again.';
+  if (/Failed to fetch|dynamically imported module|Importing a module/i.test(msg)) msg = 'No internet, or the app was just updated. Please try again.';
+  const view = h('div', { class: 'screen' }, h('main', { class: 'body' },
+    h('div', { class: 'error-box' }, msg),
+    h('button', { class: 'btn', onclick: () => render() }, t('Try again')),
+    h('a', { class: 'btn2', href: '#/home' }, t('Home'))));
+  app.replaceChildren(name ? shell(view, name) : view);
+}
+
+window.addEventListener('unhandledrejection', (ev) => {
+  const m = ev.reason && ev.reason.message ? ev.reason.message : '';
+  if (m) toast(/undefined|reading/.test(m) ? 'Something went wrong. Please try again.' : m, 'err');
+});
 
 const ACTIVE = {
   'bill/:id': 'bills', 'loan-new': 'loans', 'loan/:id': 'loans', 'order-new': 'orders', 'order/:id': 'orders',
   'repair-new': 'repairs', 'repair/:id': 'repairs', 'stock-add': 'stock', 'rate': 'home', 'search': 'home',
-  'customer/:id': 'home', 'customer-edit/:id': 'home'
+  'customer/:id': 'home', 'customer-edit/:id': 'home', 'help/:topic': 'help'
 };
 let currentParams = {};
 function activeOf(name) {
@@ -114,7 +141,9 @@ function shell(view, name) {
     ['parties/karigar', 'Karigar', 'hammer', modOn('karigar')],
     ['cash', 'Cash book', 'cash', modOn('cash')],
     ['reports', 'Reports', 'chart', modOn('reports')],
-    ['settings', 'Settings', 'gear', true]
+    ['dues', 'Baki (dues)', 'cash', true],
+    ['settings', 'Settings', 'gear', true],
+    ['help', 'Help', 'help', true]
   ].filter((x) => x[3]);
   const nav = h('nav', { class: 'side', 'aria-label': 'Menu' },
     h('div', { class: 'side-shop' }, S.settings.shop_name || 'DukanKaApp'),
@@ -123,7 +152,7 @@ function shell(view, name) {
   return h('div', { class: 'layout' }, nav, h('div', { class: 'content' }, view));
 }
 
-onSessionExpired(() => { S.user = null; go('login'); });
+onSessionExpired(() => { S.user = null; clearCached(); go('login'); });
 window.addEventListener('hashchange', render);
 document.addEventListener('dk-lang', () => render());
 

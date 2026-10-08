@@ -172,17 +172,6 @@ function countBy_(list, key) {
   return m;
 }
 
-function customerUdhaar_(customerId) {
-  var due = 0;
-  rows_('Sales').forEach(function (s) {
-    if (s.customerId === customerId && s.status !== 'void') due += num_(s.udhaar);
-  });
-  rows_('Cash').forEach(function (c) {
-    if (c.refType === 'udhaar' && c.refId === customerId) due -= num_(c.amount);
-  });
-  return round2_(due);
-}
-
 function customerGet_(id) {
   var c = find_('Customers', id);
   req_(c, 'Customer not found');

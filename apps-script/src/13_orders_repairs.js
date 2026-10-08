@@ -30,7 +30,8 @@ function orderSummary_(o) {
 function orderCreate_(user, d) {
   var c = ensureCustomer_(user, d);
   var method = d.method === 'B' ? 'B' : 'A';
-  var estWt = round3_(d.estWt);
+  var estWt = round3_(pos_(d.estWt, 'Weight'));
+  pos_(d.advance, 'Advance'); pos_(d.makingPerG, 'Making'); pos_(d.karigarPerG, 'Karigar labour'); pos_(d.rate, 'Rate');
   req_(estWt > 0, 'Enter the approximate weight');
   var making = num_(d.makingPerG);
   var rate = method === 'A' ? num_(d.rate) : 0;
@@ -87,8 +88,10 @@ function orderPay_(user, d) {
     patch.fixedTotal = orderTotalFor_(num_(o.estWt), patch.rate, num_(o.makingPerG));
   }
   if (d.deliveryDate) patch.deliveryDate = d.deliveryDate;
+  var amt = round2_(pos_(d.amount, 'Amount'));
+  pos_(d.fixRate, 'Rate');
+  req_(amt > 0 || Object.keys(patch).length, 'Enter the amount received');
   if (Object.keys(patch).length) update_('Orders', o.id, patch);
-  var amt = round2_(d.amount);
   if (amt > 0) addOrderPayment_(user, o, amt, d.mode, d.date);
   audit_(user, 'order.pay', o.id, { amount: amt, fixRate: patch.rate || '' });
   return orderGet_(o.id);
@@ -121,7 +124,9 @@ function orderStatus_(user, d) {
       });
     }
   } else if (d.status === 'cancelled') {
-    var refund = round2_(d.refund);
+    var refund = round2_(pos_(d.refund, 'Refund'));
+    var paidSoFar = orderPayments_(o.id).reduce(function (a, p) { return a + p.amount; }, 0);
+    req_(refund <= paidSoFar + 1, 'Customer paid only ₹' + Math.round(paidSoFar));
     if (refund > 0) cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', refund, 'order-refund', 'order', o.id, o.customerName, date);
   } else {
     req_(d.status === 'booked', 'Unknown status');
@@ -135,21 +140,31 @@ function orderDeliver_(user, d) {
   var o = find_('Orders', d.orderId);
   req_(o, 'Order not found');
   req_(o.status !== 'delivered' && o.status !== 'cancelled', 'Order is closed');
-  var finalWt = round3_(d.finalWt || o.finalWt || o.estWt);
-  var rate = num_(o.rate) || num_(d.rate);
+  var finalWt = round3_(pos_(d.finalWt, 'Weight') || o.finalWt || o.estWt);
+  var rate = num_(o.rate) || pos_(d.rate, 'Rate');
   req_(rate > 0, 'Enter today\'s rate to work out the price');
   var total = orderTotalFor_(finalWt, rate, num_(o.makingPerG));
   var paid = orderPayments_(o.id).reduce(function (a, p) { return a + p.amount; }, 0);
   var balance = total - paid;
-  var amt = round2_(d.amount);
-  req_(Math.abs(amt - balance) < 1 || (balance <= 0 && amt === 0), 'Collect the balance ₹' + Math.round(balance));
+  var amt = round2_(pos_(d.amount, 'Amount'));
   var date = validDate_(d.date);
+  var due = 0;
+  if (balance > 0) {
+    req_(amt <= balance + 1, 'Balance is only ₹' + Math.round(balance));
+    due = Math.round(balance - amt);
+  } else {
+    req_(amt === 0, 'Customer has already paid more than the price. Nothing to collect.');
+  }
   if (amt > 0) addOrderPayment_(user, o, amt, d.mode, date);
+  if (due >= 1) {
+    var cust = find_('Customers', o.customerId);
+    duesAdd_(user, cust, due, 'order', o.id, 'Order: ' + o.item, date);
+  }
   if (balance < 0) cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', -balance, 'order-refund', 'order', o.id, 'Extra advance returned', date);
   update_('Orders', o.id, {
     status: 'delivered', finalWt: finalWt, finalTotal: total, rate: rate, deliveredAt: date
   });
-  audit_(user, 'order.deliver', o.id, { total: total, balance: balance });
+  audit_(user, 'order.deliver', o.id, { total: total, balance: balance, due: due });
   return orderGet_(o.id);
 }
 
@@ -173,10 +188,10 @@ function repairCreate_(user, d) {
   var c = ensureCustomer_(user, d);
   var rec = {
     id: uid_('W'), date: validDate_(d.date), customerId: c.id, customerName: customerName_(c), mobile: c.mobile,
-    item: String(d.item || 'Item').trim(), work: d.work || 'polish', wtIn: round3_(d.wtIn),
+    item: String(d.item || 'Item').trim(), work: d.work || 'polish', wtIn: round3_(pos_(d.wtIn, 'Weight')),
     karigarId: d.karigarId || '', karigarRateType: d.karigarRateType === 'fixed' ? 'fixed' : 'perg',
     karigarRate: num_(d.karigarRate), custRateType: d.custRateType === 'fixed' ? 'fixed' : 'perg',
-    custRate: num_(d.custRate), deliveryDate: d.deliveryDate || '',
+    custRate: pos_(d.custRate, 'Charge'), deliveryDate: d.deliveryDate || '',
     status: d.karigarId ? 'with_karigar' : 'received', wtOut: '', karigarCost: '', custCharge: '',
     returnedAt: '', deliveredAt: '', notes: String(d.notes || ''), by: user.username, at: nowIso_()
   };
@@ -197,7 +212,8 @@ function repairsList_(d) {
 function repairReturn_(user, d) {
   var r = find_('Repairs', d.id);
   req_(r, 'Repair not found');
-  var cost = d.karigarCost !== undefined && d.karigarCost !== '' ? round2_(d.karigarCost)
+  req_(r.status !== 'delivered', 'Already given back');
+  var cost = d.karigarCost !== undefined && d.karigarCost !== '' ? round2_(pos_(d.karigarCost, 'Karigar cost'))
     : repairAmount_(r.karigarRateType, r.karigarRate, r.wtIn);
   var date = validDate_(d.date);
   var kid = d.karigarId || r.karigarId;
@@ -221,10 +237,14 @@ function repairDeliver_(user, d) {
   var r = find_('Repairs', d.id);
   req_(r, 'Repair not found');
   req_(r.status !== 'delivered', 'Already given back');
-  var charge = d.custCharge !== undefined && d.custCharge !== '' ? round2_(d.custCharge)
+  var charge = d.custCharge !== undefined && d.custCharge !== '' ? round2_(pos_(d.custCharge, 'Charge'))
     : repairAmount_(r.custRateType, r.custRate, r.wtIn);
   var date = validDate_(d.date);
-  cash_(user, 'in', d.mode === 'upi' ? 'upi' : 'cash', charge, 'repair-charge', 'repair', r.id, r.customerName, date);
+  // The customer may pay less now; the rest goes to Baki (dues).
+  var got = d.amount !== undefined && d.amount !== '' ? round2_(pos_(d.amount, 'Amount')) : charge;
+  req_(got <= charge + 1, 'Charge is only ₹' + Math.round(charge));
+  cash_(user, 'in', d.mode === 'upi' ? 'upi' : 'cash', got, 'repair-charge', 'repair', r.id, r.customerName, date);
+  if (charge - got >= 1) duesAdd_(user, find_('Customers', r.customerId), Math.round(charge - got), 'repair', r.id, 'Repair: ' + r.item, date);
   var patch = { status: 'delivered', custCharge: charge, deliveredAt: date };
   if (!r.returnedAt) {
     patch.returnedAt = date;

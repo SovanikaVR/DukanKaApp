@@ -46,7 +46,7 @@ export async function list(params, query) {
       out.replaceChildren(...(rows.length ? rows.map((b) => h('a', { class: 'row-card', href: '#/bill/' + b.id + (fy.input.value.trim() ? '?fy=' + fy.input.value.trim() : '') },
         h('div', { class: 'kv' }, h('b', null, b.customerName), h('b', null, inr(b.net))),
         h('div', { class: 'kv muted' }, h('span', null, b.billNo + ' · ' + fdate(b.date)),
-          h('span', null, b.status === 'void' ? 'Cancelled' : (b.udhaar ? 'Udhaar ' + inr(b.udhaar) : (b.type === 'GST' ? 'GST' : 'Estimate')))))) : [empty('No bills found')]));
+          h('span', null, b.status === 'void' ? 'Cancelled' : (b.udhaar ? 'Baki ' + inr(b.udhaar) : (b.type === 'GST' ? 'GST' : 'Estimate')))))) : [empty('No bills found')]));
     } catch (e) { out.replaceChildren(h('div', { class: 'error-box' }, e.message)); }
   }
   let timer;

@@ -74,6 +74,16 @@ var ROUTES = {
   'reports.daily': function (u, d) { return reportDaily_(d.date); },
   'reports.month': function (u, d) { return reportMonth_(d.month); },
   'reports.position': function () { return reportPosition_(); },
+  'dues.list': function (u, d) { return duesList_(d); },
+  'dues.pay': function (u, d) { return duesPay_(u, d); },
+  'dues.adjust': function (u, d) { return duesAdjust_(u, d); },
+  'loans.edit': function (u, d) { return loanEdit_(u, d); },
+  'loans.void': function (u, d) { return loanVoid_(u, d); },
+  'loans.undoLast': function (u, d) { return loanUndoLast_(u, d); },
+  'orders.edit': function (u, d) { return orderEdit_(u, d); },
+  'repairs.edit': function (u, d) { return repairEdit_(u, d); },
+  'cash.void': function (u, d) { return cashVoid_(u, d); },
+  'home.summary': function () { return homeSummary_(); },
   'admin.archive': function (u, d) { return archiveFy_(u, d.fy); },
   'admin.backupNow': function () { return backupNow_(); }
 };
@@ -83,7 +93,7 @@ var READ_ONLY = {
   'sale.get': 1, 'oldgold.list': 1, 'loans.list': 1, 'loans.get': 1, 'orders.list': 1, 'orders.get': 1,
   'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'melt.list': 1, 'fine.summary': 1,
   'parties.list': 1, 'parties.ledger': 1, 'cash.list': 1, 'reports.daily': 1, 'reports.month': 1,
-  'reports.position': 1, 'users.list': 1
+  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1
 };
 
 function handle_(action, token, data) {
@@ -95,10 +105,26 @@ function handle_(action, token, data) {
   if (OWNER_ONLY[action]) req_(user.role === 'owner', 'Only the owner can do this');
   if (user.role === 'viewer') req_(READ_ONLY[action] || action === 'auth.logout', 'View-only users cannot change data');
   if (READ_ONLY[action]) return fn(user, data, token);
+  // Every save from the app carries a request id (_rid). If the same save arrives twice
+  // (double tap, slow network, retry), the first result is returned and nothing is saved again.
+  var rid = data && data._rid ? 'rid_' + String(data._rid).slice(0, 60) : '';
+  var cache = rid ? CacheService.getScriptCache() : null;
   var lock = LockService.getScriptLock();
   lock.waitLock(25000);
   try {
-    return fn(user, data, token);
+    if (cache) {
+      var prev = cache.get(rid);
+      if (prev) return json_(prev, {});
+    }
+    migrateDues_();
+    var result = fn(user, data, token);
+    if (cache) {
+      try {
+        var str = JSON.stringify(result === undefined ? {} : result);
+        if (str.length < 90000) cache.put(rid, str, 21600);
+      } catch (e) { /* cache full or too large: skip */ }
+    }
+    return result;
   } finally {
     SpreadsheetApp.flush();
     lock.releaseLock();

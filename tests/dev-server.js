@@ -15,7 +15,7 @@ g.setSetting_('cash_opening_date', '2026-01-01');
 g.createUser_('Viju', 'viju', 'owner', '1234');
 
 const root = path.join(__dirname, '..', 'web');
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.mp4': 'video/mp4', '.jpg': 'image/jpeg' };
 
 const server = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url.startsWith('/api')) {

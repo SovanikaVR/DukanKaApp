@@ -1,5 +1,5 @@
 /* Bills and receipts: A4 / 58 mm / 80 mm layouts, print, PDF, WhatsApp. All free, all on the phone. */
-import { h, toast, fdate, g3 } from './ui.js';
+import { h, toast, fdate, g3, busy } from './ui.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const m2 = (n) => Calc.inr(n, 2);
@@ -159,15 +159,22 @@ function loadHtml2pdf() {
 /** Makes an A4 PDF blob from a document's html. */
 export async function pdfBlob(html) {
   await loadHtml2pdf();
-  const holder = h('div', { style: { position: 'fixed', left: '-10000px', top: '0', background: '#fff' } });
+  // Rendered at full A4 width, at the top-left of the page (behind the "Making PDF" cover).
+  // On a phone the screen is narrower than A4: without this the right side (amounts) was cut off.
+  const holder = h('div', { style: { position: 'absolute', left: '0', top: '0', width: '760px', background: '#fff', zIndex: '-1' } });
   holder.innerHTML = `<style>${DOC_CSS}</style>${html}`;
   document.body.appendChild(holder);
+  const y = window.scrollY;
+  window.scrollTo(0, 0);
   try {
+    const el = holder.lastElementChild;
     return await window.html2pdf().set({
-      margin: 8, image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2, useCORS: true },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-    }).from(holder.lastElementChild).outputPdf('blob');
-  } finally { holder.remove(); }
+      margin: 8, image: { type: 'jpeg', quality: 0.95 },
+      html2canvas: { scale: 2, useCORS: true, windowWidth: 1000, width: el.scrollWidth, scrollX: 0, scrollY: 0, x: 0, y: 0 },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'] }
+    }).from(el).outputPdf('blob');
+  } finally { holder.remove(); window.scrollTo(0, y); }
 }
 
 export async function downloadPdf(html, filename) {
@@ -208,18 +215,16 @@ export function billText(b) {
 /** Row of share / print buttons for any document. */
 export function docActions(getHtml, opts) {
   const { filename, text, mobile } = opts;
-  const btn = (label, sub, fn, cls) => h('button', { class: 'opt ' + (cls || ''), type: 'button', onclick: async (e) => {
-    const b = e.currentTarget; b.disabled = true;
-    try { await fn(); } catch (err) { toast(err.message, 'err'); } finally { b.disabled = false; }
-  } }, h('span', null, label, h('small', null, sub)));
+  const btn = (label, sub, fn, cls, slow) => h('button', { class: 'opt ' + (cls || ''), type: 'button', onclick: () =>
+    busy(null, fn, slow ? 'Making PDF…' : 'Please wait…') }, h('span', null, label, h('small', null, sub)));
   const size = () => { try { return localStorage.getItem('dk_thermal') || '58'; } catch (e) { return '58'; } };
   return h('div', { class: 'stack' },
     h('div', { class: 'sec' }, 'SEND'),
-    btn('Send PDF on WhatsApp', 'Pick the customer\'s chat, PDF goes as a file', () => sharePdf(getHtml('a4'), filename, text), 'wa'),
+    btn('Send PDF on WhatsApp', 'Pick the customer\'s chat, PDF goes as a file', () => sharePdf(getHtml('a4'), filename, text), 'wa', true),
     mobile ? btn('Open customer\'s chat', 'Bill summary as a message, ready to send', () => openChat(mobile, text)) : null,
     h('div', { class: 'sec' }, 'PRINT'),
     h('div', { class: 'grid g2' },
       btn('Thermal ' + size() + ' mm', 'Bluetooth receipt printer', () => printDoc(getHtml(size()), size())),
       btn('A4 / A5', 'Normal printer', () => printDoc(getHtml('a4'), 'a4'))),
-    btn('Download PDF', 'Save on this phone or computer', () => downloadPdf(getHtml('a4'), filename)));
+    btn('Download PDF', 'Save on this phone or computer', () => downloadPdf(getHtml('a4'), filename), '', true));
 }

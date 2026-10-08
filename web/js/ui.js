@@ -1,5 +1,5 @@
 /* Small DOM helpers and shared form pieces (no framework, no build step). */
-import { t } from './i18n.js';
+import { t, getLang } from './i18n.js';
 
 // replaceChildren() that, like h(), skips null/false (so "cond ? el : null" never prints "null").
 if (typeof Element !== 'undefined' && !Element.prototype._dkPatched) {
@@ -25,6 +25,7 @@ export function h(tag, attrs, ...kids) {
       else if (k === 'value') el.value = v;
       else if (k === 'checked') el.checked = !!v;
       else if (k === 'html') el.innerHTML = v;
+      else if (k === 'placeholder' || k === 'aria-label' || k === 'title') el.setAttribute(k, t(String(v)));
       else el.setAttribute(k, v === true ? '' : v);
     }
   }
@@ -36,16 +37,19 @@ function append(el, kids) {
   for (const k of kids) {
     if (k === null || k === undefined || k === false) continue;
     if (Array.isArray(k)) append(el, k);
-    else el.appendChild(k instanceof Node ? k : document.createTextNode(String(k)));
+    // Plain text is passed through t(), so Hindi mode translates every known label automatically.
+    else el.appendChild(k instanceof Node ? k : document.createTextNode(typeof k === 'string' ? t(k) : String(k)));
   }
 }
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 
 /** Navigate to a screen, e.g. go('bill/S123'). Re-renders even when already there. */
-export function go(path) {
+export function go(path, opts = {}) {
   const target = '#/' + path;
   if (location.hash === target) window.dispatchEvent(new HashChangeEvent('hashchange'));
+  // After a save, replace the form in history: the Back button then cannot reopen a filled form.
+  else if (opts.replace || saving) location.replace(target);
   else location.hash = target;
 }
 
@@ -72,26 +76,53 @@ export function todayStr() {
 
 export function toast(msg, kind = 'ok') {
   document.querySelectorAll('.toast').forEach((x) => x.remove());
-  const el = h('div', { class: 'toast ' + kind, role: 'status' }, msg);
+  const el = h('div', { class: 'toast ' + kind, role: 'status' }, t(String(msg)));
   document.body.appendChild(el);
   setTimeout(() => el.classList.add('show'), 10);
   setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, kind === 'err' ? 5000 : 2600);
 }
 
-/** Runs an async action with the button disabled and errors shown as a toast. */
-export async function busy(btn, fn) {
+/* ---------- saving: one at a time, with a full-screen "Saving…" cover ---------- */
+
+let saving = false;
+let cover = null;
+export function isSaving() { return saving; }
+
+function showCover(text) {
+  if (!cover) {
+    cover = h('div', { class: 'cover', role: 'alert', 'aria-live': 'assertive' },
+      h('div', { class: 'cover-box' }, h('span', { class: 'spinner big' }), h('div', { class: 'cover-text' })));
+  }
+  cover.querySelector('.cover-text').textContent = t(text || 'Saving… please wait');
+  if (!cover.isConnected) document.body.appendChild(cover);
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+}
+function hideCover() { if (cover) cover.remove(); }
+
+/**
+ * Runs a save. While it runs the whole screen is covered, so nothing can be tapped twice
+ * (the same girvi cannot be released two times). Errors are shown as a message.
+ */
+export async function busy(btn, fn, text) {
+  if (saving) return undefined;
+  saving = true;
   const label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = t('Please wait…'); }
+  showCover(text);
   try { return await fn(); }
   catch (e) { toast(e.message || String(e), 'err'); return undefined; }
-  finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+  finally {
+    saving = false;
+    hideCover();
+    if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = label; }
+  }
 }
 
 export function modal(title, body, actions = []) {
   return new Promise((resolve) => {
     const close = (v) => { wrap.remove(); resolve(v); };
     const wrap = h('div', { class: 'modal-wrap', onclick: (e) => { if (e.target === wrap) close(null); } },
-      h('div', { class: 'modal', role: 'dialog', 'aria-label': title },
+      h('div', { class: 'modal', role: 'dialog', 'aria-label': title }, 
         h('div', { class: 'modal-title' }, title),
         h('div', { class: 'modal-body' }, body),
         h('div', { class: 'modal-actions' },
@@ -124,11 +155,22 @@ export const confirmBox = (title, text, okLabel) =>
 
 /* ---------- layout pieces ---------- */
 
+const HELP_OF = {
+  sale: 'sale', bill: 'sale', bills: 'sale', loans: 'girvi', 'loan-new': 'girvi', loan: 'girvi', orders: 'orders',
+  'order-new': 'orders', order: 'orders', repairs: 'repair', 'repair-new': 'repair', repair: 'repair', stock: 'stock',
+  'stock-add': 'stock', oldgold: 'oldgold', melt: 'melt', parties: 'partners', party: 'partners', cash: 'cash',
+  reports: 'reports', settings: 'settings', dues: 'dues', search: 'customers', customer: 'customers',
+  'customer-edit': 'customers', rate: 'rate'
+};
+
 export function topbar(title, sub, opts = {}) {
+  const first = location.hash.replace(/^#\/?/, '').split(/[/?]/)[0];
+  const topic = opts.help || HELP_OF[first];
   return h('header', { class: 'top' },
     h('a', { class: 'back', href: opts.back || '#/home', 'aria-label': t('Back') }, icon('back')),
     h('div', { class: 'top-text' }, h('div', { class: 'top-title' }, title), sub ? h('div', { class: 'top-sub' }, sub) : null),
-    opts.right || null);
+    opts.right || null,
+    topic ? h('a', { class: 'help-btn', href: '#/help/' + topic, 'aria-label': t('Help') }, icon('help')) : null);
 }
 
 export function screen(title, sub, body, foot, opts) {
@@ -151,14 +193,16 @@ export function field(label, opts = {}) {
   let input;
   if (opts.type === 'textarea') input = h('textarea', Object.assign(attrs, { rows: opts.rows || 2 }));
   else {
-    if (opts.type === 'num') Object.assign(attrs, { inputmode: 'decimal', type: 'text', autocomplete: 'off' });
+    if (opts.type === 'num') { Object.assign(attrs, { inputmode: 'decimal', type: 'text', autocomplete: 'off' }); if (opts.min0 !== false) opts.min0 = true; }
     else if (opts.type === 'tel') Object.assign(attrs, { inputmode: 'tel', type: 'tel', autocomplete: 'off' });
     else if (opts.type === 'date') attrs.type = 'date';
     else if (opts.type === 'pin') Object.assign(attrs, { inputmode: 'numeric', type: 'password', autocomplete: 'current-password' });
     else attrs.type = 'text';
     input = h('input', attrs);
   }
-  const wrap = h('label', { class: 'f' + (opts.cls ? ' ' + opts.cls : '') }, h('span', { class: 'lbl' }, label), input);
+  const wrap = h('label', { class: 'f' + (opts.cls ? ' ' + opts.cls : '') }, h('span', { class: 'lbl' }, label), input,
+    opts.hint ? h('span', { class: 'fhint' }, opts.hint) : null);
+  if (opts.min0) input.addEventListener('input', () => { if (/-/.test(input.value)) input.value = input.value.replace(/-/g, ''); });
   wrap.input = input;
   return wrap;
 }
@@ -173,7 +217,7 @@ export function seg(options, value, onpick) {
       el.appendChild(h('button', {
         type: 'button', class: o.value === current ? 'on' : '', 'aria-pressed': o.value === current ? 'true' : 'false',
         onclick: () => { current = o.value; draw(); onpick && onpick(o.value); }
-      }, o.label));
+      }, typeof o.label === 'string' ? t(o.label) : o.label));
     });
   };
   draw();
@@ -221,7 +265,11 @@ const ICONS = {
   plus: 'M12 5v14M5 12h14',
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
   logout: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
-  camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 10a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z'
+  camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 10a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z',
+  help: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01',
+  rupee: 'M6 4h12M6 9h12M6 4c6 0 8 2 8 5s-3 5-8 5l8 7',
+  edit: 'M4 20h4L19 9l-4-4L4 16zM14 6l4 4',
+  undo: 'M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3'
 };
 export function icon(name, size = 22) {
   const ns = 'http://www.w3.org/2000/svg';

@@ -1,6 +1,8 @@
-/* English by default; one tap switches the main labels to Hindi. Missing words stay in English. */
+/* English by default; one tap switches the screens to Hindi. In English mode no Hindi is shown. */
 
-const HI = {
+import { HI as MORE } from './i18n-hi.js';
+
+const BASE = {
   'Girvi Loan': 'गिरवी लोन', 'New Sale': 'नई बिक्री', 'Buy Old Gold': 'पुराना सोना', 'Orders': 'ऑर्डर',
   'Stock': 'स्टॉक', 'Reports': 'रिपोर्ट', 'Repair': 'रिपेयर', 'Melting': 'गलाई', 'Wholesaler': 'होलसेलर',
   'Karigar': 'कारीगर', 'Settings': 'सेटिंग', 'Cash book': 'कैश बुक', 'Bills': 'बिल',
@@ -20,10 +22,18 @@ const HI = {
   'New customer': 'नया ग्राहक', 'Customer': 'ग्राहक', 'Delivery date': 'डिलीवरी तारीख', 'Date': 'तारीख',
   'Profit today': 'आज का प्रॉफिट', 'Total': 'कुल', 'Balance': 'बाकी', 'Advance': 'एडवांस'
 };
+const HI = Object.assign({}, BASE, MORE);
+
 
 let lang = (() => { try { return localStorage.getItem('dk_lang') || 'en'; } catch (e) { return 'en'; } })();
 
-export function t(s) { return lang === 'hi' && HI[s] ? HI[s] : s; }
+export function t(s) {
+  if (lang !== 'hi' || typeof s !== 'string') return s;
+  if (HI[s]) return HI[s];
+  const k = s.trim();
+  if (k !== s && HI[k]) return s.replace(k, HI[k]);
+  return s;
+}
 export function getLang() { return lang; }
 export function setLang(l) {
   lang = l === 'hi' ? 'hi' : 'en';

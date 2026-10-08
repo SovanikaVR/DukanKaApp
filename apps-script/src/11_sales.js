@@ -44,18 +44,29 @@ function saleCreate_(user, d) {
       req_(item, 'Stock item not found');
       req_(item.status === 'in', 'Item ' + (item.tag || item.name) + ' is not in stock');
     }
-    var w = num_(l.weight), rate = num_(l.rate), mk = num_(l.makingPerG);
+    var w = pos_(l.weight, 'Weight'), rate = pos_(l.rate, 'Rate'), mk = pos_(l.makingPerG, 'Making');
+    pos_(l.amount, 'Amount');
     var amount = l.amount !== undefined && l.amount !== '' && !w ? num_(l.amount)
       : round2_(Calc.evalFormula(saleFormula, { Weight: w, Rate: rate, Making: mk }));
     subtotal += amount;
-    var cost = item ? num_(item.costTotal) : 0;
+    // A lot (many pieces / loose weight) can be sold in part: only what was sold leaves stock.
+    var part = null;
+    if (item) {
+      var lotWt = num_(item.netWt), lotPcs = num_(item.pieces) || 1;
+      var soldWt = w > 0 ? Math.min(w, lotWt) : lotWt;
+      var soldPcs = lotPcs > 1 ? Math.max(1, Math.round(num_(l.pieces) || 1)) : 1;
+      req_(soldPcs <= lotPcs, 'Only ' + lotPcs + ' pieces left in ' + (item.tag || item.name));
+      if (soldWt < lotWt - 0.0005 || soldPcs < lotPcs) part = { wt: round3_(soldWt), pcs: soldPcs,
+        cost: round2_(num_(item.costTotal) * soldWt / (lotWt || 1)) };
+    }
+    var cost = item ? (part ? part.cost : num_(item.costTotal)) : 0;
     costTotal += cost;
     if (l.saveName && l.name) namesToSave.push(l.name);
     return {
       itemId: l.itemId || '', tag: item ? item.tag : '', name: String(l.name || (item && item.name) || 'Item'),
       metal: l.metal || (item && item.metal) || 'gold', purityPct: num_(l.purityPct || (item && item.purityPct)),
       huid: String(l.huid || ''), weight: round3_(w), rate: rate, makingPerG: mk,
-      metalValue: round2_(w * rate), making: round2_(w * mk), amount: amount, cost: cost
+      metalValue: round2_(w * rate), making: round2_(w * mk), amount: amount, cost: cost, part: part
     };
   });
   subtotal = round2_(subtotal);
@@ -68,7 +79,8 @@ function saleCreate_(user, d) {
   var oldValue = old.reduce(function (a, g) { return a + g.amount; }, 0);
   var net = invoiceTotal - oldValue;
 
-  var cash = round2_(d.cash), upi = round2_(d.upi), udhaar = round2_(d.udhaar);
+  var cash = round2_(pos_(d.cash, 'Cash')), upi = round2_(pos_(d.upi, 'UPI')), udhaar = round2_(pos_(d.udhaar, 'Baki'));
+  req_(!(net < 0 && udhaar), 'Baki is not possible when we pay the customer');
   if (net >= 0) {
     req_(Math.abs(cash + upi + udhaar - net) < 1, 'Cash + UPI + Udhaar should add up to ₹' + net);
   } else {
@@ -88,8 +100,19 @@ function saleCreate_(user, d) {
   };
   insert_('Sales', bill);
   cleanLines.forEach(function (l) {
-    if (l.itemId) update_('Items', l.itemId, { status: 'sold', soldBillId: id });
+    if (!l.itemId) return;
+    if (l.part) {
+      var it = find_('Items', l.itemId);
+      var left = round3_(num_(it.netWt) - l.part.wt);
+      var pcsLeft = (num_(it.pieces) || 1) - l.part.pcs;
+      update_('Items', l.itemId, {
+        netWt: Math.max(left, 0), grossWt: round3_(Math.max(0, num_(it.grossWt) - l.part.wt)), pieces: Math.max(pcsLeft, 0),
+        costTotal: round2_(num_(it.costTotal) - l.part.cost),
+        status: left <= 0.0005 || pcsLeft <= 0 ? 'sold' : 'in', soldBillId: id
+      });
+    } else update_('Items', l.itemId, { status: 'sold', soldBillId: id });
   });
+  if (udhaar > 0) duesAdd_(user, c, udhaar, 'sale', id, 'Bill ' + billNo, date);
   old.forEach(function (g) {
     insert_('OldGold', {
       id: uid_('G'), date: date, customerId: c.id, customerName: customerName_(c), source: 'sale', billId: id,
@@ -174,8 +197,19 @@ function saleVoid_(user, d) {
   req_(b.status !== 'void', 'Bill is already cancelled');
   update_('Sales', b.id, { status: 'void' });
   json_(b.lines, []).forEach(function (l) {
-    if (l.itemId) update_('Items', l.itemId, { status: 'in', soldBillId: '' });
+    if (!l.itemId) return;
+    var it = find_('Items', l.itemId);
+    if (!it) return;
+    if (l.part) {
+      update_('Items', l.itemId, { status: 'in', netWt: round3_(num_(it.netWt) + l.part.wt),
+        grossWt: round3_(num_(it.grossWt) + l.part.wt), pieces: num_(it.pieces) + l.part.pcs,
+        costTotal: round2_(num_(it.costTotal) + l.part.cost) });
+    } else update_('Items', l.itemId, { status: 'in', soldBillId: '' });
   });
+  if (num_(b.udhaar) > 0) {
+    var cust = find_('Customers', b.customerId);
+    if (cust) duesAdd_(user, cust, -num_(b.udhaar), 'sale-cancel', b.id, 'Cancelled ' + b.billNo);
+  }
   rows_('OldGold').filter(function (g) { return g.billId === b.id; }).forEach(function (g) {
     req_(g.status !== 'melted', 'Old gold from this bill is already melted; cannot cancel');
     update_('OldGold', g.id, { status: 'void' });
@@ -188,15 +222,7 @@ function saleVoid_(user, d) {
   return { ok: true };
 }
 
-function salePayUdhaar_(user, d) {
-  var c = find_('Customers', d.customerId);
-  req_(c, 'Customer not found');
-  var amt = round2_(d.amount);
-  req_(amt > 0, 'Enter the amount');
-  cash_(user, 'in', d.mode === 'upi' ? 'upi' : 'cash', amt, 'udhaar', 'udhaar', c.id, customerName_(c), d.date);
-  audit_(user, 'udhaar.pay', c.id, { amount: amt });
-  return { udhaar: customerUdhaar_(c.id) };
-}
+function salePayUdhaar_(user, d) { return duesPay_(user, d); }
 
 /* ---------- Old gold bought for cash ---------- */
 

@@ -19,7 +19,10 @@ const BASE = 'http://localhost:8787';
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error' && !/fonts\.g|ERR_|Failed to load resource/.test(m.text())) errors.push(m.text()); });
   const shot = (n) => page.screenshot({ path: path.join(shots, n + '.png'), fullPage: true });
-  const step = async (name, fn) => { await fn(); console.log('  ✓ ' + name); };
+  const step = async (name, fn) => {
+    try { await fn(); } catch (e) { await shot('FAIL'); console.log('ERRORS:', errors); throw e; }
+    console.log('  ✓ ' + name);
+  };
   const toastGone = () => page.waitForTimeout(300);
 
   await page.goto(BASE);
@@ -104,7 +107,7 @@ const BASE = 'http://localhost:8787';
     await page.getByText('Interest ₹1,200 per month').waitFor();
     await shot('07-loan-new');
     await page.getByRole('button', { name: 'Save & send receipt' }).click();
-    await page.getByText('Girvi saved').waitFor();
+    await page.getByText('Girvi saved').first().waitFor();
     await shot('08-loan-view');
   });
 
@@ -123,7 +126,7 @@ const BASE = 'http://localhost:8787';
 
   await step('reports + other screens open without errors', async () => {
     for (const r of ['reports', 'reports?t=position', 'reports?t=month', 'loans', 'orders', 'repairs', 'repair-new', 'stock', 'stock-add', 'melt',
-      'parties/wholesaler', 'parties/karigar', 'cash', 'bills', 'search', 'oldgold', 'home']) {
+      'parties/wholesaler', 'parties/karigar', 'cash', 'bills', 'search', 'oldgold', 'dues', 'help', 'help/sale', 'home']) {
       await page.goto(BASE + '/#/' + r);
       await page.waitForLoadState('networkidle');
       await page.waitForTimeout(250);
@@ -133,6 +136,68 @@ const BASE = 'http://localhost:8787';
     await page.goto(BASE + '/#/melt');
     await page.waitForLoadState('networkidle');
     await shot('10-melt');
+  });
+
+  await step('double tap saves one bill; Back does not reopen the filled form', async () => {
+    await page.goto(BASE + '/#/home');
+    await page.goto(BASE + '/#/sale?cid=');
+    await page.getByPlaceholder('Type mobile or name').fill('ramesh');
+    await page.locator('.pick-item', { hasText: 'Ramesh Patil' }).click();
+    await page.getByLabel('Item name').fill('Bichhiya');
+    await page.locator('.card').first().getByLabel('Weight (g)').fill('2');
+    await page.getByLabel('Baki', { exact: true }).fill('5000');
+    const before = await page.evaluate(async () => (await (await fetch('/api', { method: 'POST', body: JSON.stringify({ action: 'sale.list', token: localStorage.getItem('dk_token'), data: {} }) })).json()).data.length);
+    const save = page.getByRole('button', { name: 'Save bill' });
+    await save.dblclick();
+    await page.locator('.paper').waitFor();
+    const after = await page.evaluate(async () => (await (await fetch('/api', { method: 'POST', body: JSON.stringify({ action: 'sale.list', token: localStorage.getItem('dk_token'), data: {} }) })).json()).data.length);
+    if (after !== before + 1) throw new Error('expected 1 new bill, got ' + (after - before));
+    await page.goBack();
+    await page.waitForTimeout(500);
+    if (/#\/sale/.test(page.url())) throw new Error('Back returned to the sale form: ' + page.url());
+  });
+
+  await step('baki list: shows the customer, then pay back removes them', async () => {
+    await page.goto(BASE + '/#/dues');
+    await page.locator('.card', { hasText: 'Ramesh Patil' }).first().waitFor();
+    await shot('12-dues');
+    await page.locator('.due-row', { hasText: 'Ramesh Patil' }).click();
+    await page.getByRole('button', { name: 'Payment received' }).click();
+    await page.locator('.modal').getByRole('button', { name: 'Save' }).click();
+    await page.getByText('Fully paid').waitFor();
+    await page.getByText('Nobody owes anything').waitFor();
+  });
+
+  await step('negative typed in a number box is ignored', async () => {
+    await page.goto(BASE + '/#/order-new');
+    const f = page.getByLabel('Advance paid (₹)');
+    await f.fill('-500');
+    if ((await f.inputValue()).includes('-')) throw new Error('minus sign accepted');
+  });
+
+  await step('owner tools on girvi + help pages + Hindi mode', async () => {
+    await page.goto(BASE + '/#/loans');
+    await page.locator('.row-card').first().click();
+    await page.getByRole('button', { name: 'Edit details' }).waitFor();
+    await page.goto(BASE + '/#/help');
+    await page.getByText('Girvi (gold loan)').click();
+    await page.getByText('How to do it').waitFor();
+    await shot('13-help');
+    await page.goto(BASE + '/#/home');
+    await page.getByRole('button', { name: 'हिं' }).click();
+    await page.locator('.tile', { hasText: 'नई बिक्री' }).waitFor();
+    await shot('14-home-hindi');
+    await page.goto(BASE + '/#/sale');
+    await page.getByText('बिल सेव करें').waitFor();
+    await shot('15-sale-hindi');
+    await page.goto(BASE + '/#/home');
+    await page.getByRole('button', { name: 'EN' }).click();
+    await page.locator('.tile', { hasText: 'New Sale' }).waitFor();
+    const hindi = await page.evaluate(() => {
+      const txt = document.querySelector('#app').innerText.replace('हिं', '');
+      return /[ऀ-ॿ]/.test(txt);
+    });
+    if (hindi) throw new Error('Hindi text visible in English mode');
   });
 
   await step('desktop layout shows side menu', async () => {

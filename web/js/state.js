@@ -3,11 +3,25 @@ import { call } from './api.js';
 
 export const S = { user: null, settings: {}, rate: null, today: '', version: '' };
 
+const CACHE = 'dk_boot';
+
+/** Loads shop settings + today's rate. Kept on the phone so the app opens instantly next time. */
 export async function refresh() {
   const b = await call('bootstrap');
   Object.assign(S, b);
+  try { localStorage.setItem(CACHE, JSON.stringify(b)); } catch (e) { /* ignore */ }
   return S;
 }
+
+/** Fills S from the last saved copy (if any). Returns true when it did. */
+export function loadCached() {
+  try {
+    const b = JSON.parse(localStorage.getItem(CACHE) || 'null');
+    if (b && b.user && b.settings) { Object.assign(S, b); return true; }
+  } catch (e) { /* ignore */ }
+  return false;
+}
+export function clearCached() { try { localStorage.removeItem(CACHE); } catch (e) { /* ignore */ } }
 
 export function modules() {
   try { return JSON.parse(S.settings.modules || '{}'); } catch (e) { return {}; }

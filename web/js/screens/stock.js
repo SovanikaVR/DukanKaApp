@@ -1,6 +1,6 @@
 /* Stock: summary by category, item list, add items. */
 import { call } from '../api.js';
-import { list as settingList, purityFor, isViewer } from '../state.js';
+import { list as settingList, purityFor, isViewer, isOwner } from '../state.js';
 import { h, screen, field, card, grid, seg, busy, toast, inr, g3, go, empty, chips, num, ask } from '../ui.js';
 import { t } from '../i18n.js';
 
@@ -14,6 +14,19 @@ export async function render(params, query) {
     const v = await ask('Remove from stock?', [{ key: 'why', label: 'Reason (lost, sent back, own use…)', value: '' }], 'Remove');
     if (!v) return;
     await busy(null, async () => { await call('stock.update', { id: i.id, status: 'removed' }); toast('Removed'); go('stock?m=' + metal + '&c=' + encodeURIComponent(cat)); });
+  };
+  const edit = async (i) => {
+    const v = await ask(t('Correct stock item'), [
+      { key: 'name', label: t('Item'), type: 'text', value: i.name },
+      { key: 'category', label: 'Category', type: 'text', value: i.category },
+      { key: 'grossWt', label: 'Gross wt (g)', type: 'num', value: String(i.grossWt) },
+      { key: 'netWt', label: 'Net wt (g)', type: 'num', value: String(i.netWt) },
+      { key: 'pieces', label: 'Pieces', type: 'num', value: String(i.pieces) },
+      { key: 'purityPct', label: t('Purity %'), type: 'num', value: String(i.purityPct || '') },
+      { key: 'makingPerG', label: t('Making ₹/g'), type: 'num', value: String(i.makingPerG || '') },
+      { key: 'costTotal', label: 'Our cost ₹ (total)', type: 'num', value: String(i.costTotal || '') }]);
+    if (!v) return;
+    await busy(null, async () => { await call('stock.update', Object.assign({ id: i.id }, v)); toast('Saved'); go('stock?m=' + metal + '&c=' + encodeURIComponent(cat)); });
   };
   return screen(t('Stock'), 'Today: ' + sum.soldToday + ' sold', [
     h('div', { class: 'stat-row' },
@@ -29,7 +42,10 @@ export async function render(params, query) {
     items.length ? items.map((i) => h('div', { class: 'row-card' },
       h('div', { class: 'kv' }, h('b', null, (i.tag ? i.tag + ' · ' : '') + i.name), h('b', null, g3(i.netWt) + ' g')),
       h('div', { class: 'kv muted' }, h('span', null, i.category + (i.purityPct ? ' · ' + i.purityPct + '%' : '') + (i.pieces > 1 ? ' · ' + i.pieces + ' pcs' : '')),
-        isViewer() ? null : h('button', { class: 'link', onclick: () => remove(i) }, 'Remove')))) : empty('Nothing here')
+        h('span', { class: 'row-actions' },
+          isOwner() ? h('button', { class: 'link', onclick: () => edit(i) }, t('Edit')) : null,
+          isViewer() ? null : h('button', { class: 'link', onclick: () => remove(i) }, 'Remove'))))) : empty('Nothing here'),
+    h('div', { class: 'hint' }, t('Selling from stock: in New Sale tap "From stock". Then the item leaves stock by itself (for a lot, only the weight / pieces sold). Items typed by hand in a bill do not change stock.'))
   ], isViewer() ? null : h('a', { class: 'btn', href: '#/stock-add?m=' + metal }, '+ Add stock'));
 }
 

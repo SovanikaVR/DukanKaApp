@@ -42,7 +42,7 @@ export async function profile({ id }) {
   const pre = `c=${c.id}&cn=${encodeURIComponent(d.name)}&cv=${encodeURIComponent(c.village)}&cm=${c.mobile}`;
   const wa = c.mobile ? 'https://wa.me/91' + c.mobile : null;
   const header = h('div', { class: 'stat-row' },
-    stat('Girvi due', inr(d.girviDue)), stat('Order advance', inr(d.orderAdvance)), stat('Udhaar', inr(d.udhaar)));
+    stat('Girvi due', inr(d.girviDue)), stat('Order advance', inr(d.orderAdvance)), stat('Baki', inr(d.udhaar)));
 
   const loans = d.loans.filter((l) => l.status === 'open').map((l) => h('a', { class: 'row-card', href: '#/loan/' + l.id },
     h('div', { class: 'kv' }, h('b', null, l.item + ' · ' + g3(l.netWt) + ' g'), h('span', { class: 'link' }, 'Release ›')),
@@ -64,7 +64,7 @@ export async function profile({ id }) {
       wa ? h('a', { class: 'pill', href: wa, target: '_blank', rel: 'noopener' }, icon('wa', 18), 'WhatsApp') : null,
       c.mobile ? h('a', { class: 'pill', href: 'tel:+91' + c.mobile }, icon('phone', 18), 'Call') : null,
       isViewer() ? null : h('a', { class: 'pill', href: '#/customer-edit/' + c.id }, 'Edit'),
-      d.udhaar > 0 && !isViewer() ? h('button', { class: 'pill', onclick: () => payUdhaar(c.id, d.udhaar) }, 'Udhaar received') : null),
+      d.udhaar > 0 && !isViewer() ? h('button', { class: 'pill', onclick: () => payUdhaar(c.id, d.udhaar) }, 'Baki received') : null),
     modOn('girvi') ? [sec('GIRVI · ' + loans.length + ' OPEN'), loans.length ? loans : empty('No open girvi')] : null,
     modOn('orders') ? [sec('ORDERS · ' + orders.length + ' PENDING'), orders.length ? orders : empty('No pending orders')] : null,
     modOn('repair') && repairs.length ? [sec('REPAIRS'), repairs] : null,
@@ -80,15 +80,15 @@ function stat(label, value) {
 }
 
 async function payUdhaar(customerId, due) {
-  const v = await ask('Udhaar received · due ' + inr(due), [
+  const v = await ask('Baki received · due ' + inr(due), [
     { key: 'amount', label: 'Amount (₹)', type: 'num', value: String(Math.round(due)) },
     { key: 'mode', label: 'Paid by', options: [{ value: 'cash', label: 'Cash' }, { value: 'upi', label: 'UPI' }], value: 'cash' }]);
   if (!v) return;
-  try {
-    await call('sale.payUdhaar', { customerId, amount: v.amount, mode: v.mode });
+  await busy(null, async () => {
+    await call('dues.pay', { customerId, amount: v.amount, mode: v.mode });
     toast('Saved');
     go('customer/' + customerId);
-  } catch (e) { toast(e.message, 'err'); }
+  });
 }
 
 export async function edit({ id }) {

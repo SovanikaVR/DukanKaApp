@@ -79,9 +79,11 @@ function stockUpdate_(user, d) {
   var i = find_('Items', d.id);
   req_(i, 'Item not found');
   var patch = {};
-  ['tag', 'name', 'category', 'metal', 'purityPct', 'grossWt', 'netWt', 'pieces', 'makingPerG', 'costTotal'].forEach(function (k) {
-    if (d[k] !== undefined) patch[k] = d[k];
+  ['tag', 'name', 'category', 'metal'].forEach(function (k) { if (d[k] !== undefined) patch[k] = String(d[k]); });
+  ['purityPct', 'grossWt', 'netWt', 'pieces', 'makingPerG', 'costTotal'].forEach(function (k) {
+    if (d[k] !== undefined && d[k] !== '') patch[k] = pos_(d[k], k);
   });
+  req_(i.status === 'in' || d.status, 'This item is already sold');
   if (d.status) {
     req_(['in', 'removed'].indexOf(d.status) >= 0, 'Bad status');
     patch.status = d.status;
@@ -239,7 +241,7 @@ function partyEntry_(user, d) {
   var p = find_('Parties', d.partyId);
   req_(p, 'Not found');
   var date = validDate_(d.date);
-  var g = round3_(d.goldG), c = round2_(d.cash), rate = num_(d.rate);
+  var g = round3_(pos_(d.goldG, 'Grams')), c = round2_(pos_(d.cash, 'Amount')), rate = pos_(d.rate, 'Rate');
   var mode = d.mode === 'upi' ? 'upi' : 'cash';
   var e = { id: uid_('Y'), partyId: p.id, date: date, type: d.type, goldG: 0, cash: 0, rate: '',
     refType: d.refType || '', refId: d.refId || '', notes: String(d.notes || ''), by: user.username, at: nowIso_() };
@@ -317,7 +319,7 @@ function cashList_(d) {
 }
 
 function cashAdd_(user, d) {
-  var amt = round2_(d.amount);
+  var amt = round2_(pos_(d.amount, 'Amount'));
   req_(amt > 0, 'Enter the amount');
   var dir = d.dir === 'in' ? 'in' : 'out';
   var rec = cash_(user, dir, d.mode === 'upi' ? 'upi' : 'cash', amt, dir === 'out' ? 'expense' : 'other-income',

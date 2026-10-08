@@ -19,9 +19,19 @@ function sheet_(name) {
     sh.getRange('A:' + colLetter_(headers.length)).setNumberFormat('@');
     sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
     sh.setFrozenRows(1);
+  } else if (!_headerChecked[name]) {
+    // Newer app versions add columns at the end: write the full header row once.
+    var headers2 = SCHEMA[name];
+    var cur = sh.getRange(1, 1, 1, headers2.length).getValues()[0];
+    if (String(cur[headers2.length - 1]) !== headers2[headers2.length - 1]) {
+      sh.getRange(1, 1, 1, headers2.length).setValues([headers2]).setFontWeight('bold');
+      sh.getRange('A:' + colLetter_(headers2.length)).setNumberFormat('@');
+    }
   }
+  _headerChecked[name] = true;
   return sh;
 }
+var _headerChecked = {};
 
 function colLetter_(n) {
   var s = '';
@@ -52,6 +62,8 @@ function rows_(name) {
       out.push(o);
     }
   }
+  // Cancelled cash entries and loan payments stay in the sheet for history but count nowhere.
+  if (name === 'Cash' || name === 'LoanTxns') out = out.filter(function (o) { return o.status !== 'void'; });
   _rowsCache[name] = out;
   return out;
 }
@@ -142,6 +154,13 @@ function validDate_(s) {
 }
 
 function req_(cond, msg) { if (!cond) throw new Error(msg); }
+
+/** Money / weight typed in a form: blank = 0, negative is refused. */
+function pos_(v, label) {
+  var n = num_(v);
+  req_(n >= 0, (label || 'Amount') + ' cannot be negative');
+  return n;
+}
 
 /* ---------- Settings ---------- */
 

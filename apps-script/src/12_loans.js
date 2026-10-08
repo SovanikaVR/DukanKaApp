@@ -13,7 +13,8 @@ function loanTxns_(loanId) {
 
 function loanCreate_(user, d) {
   var c = ensureCustomer_(user, d);
-  var principal = round2_(d.principal);
+  var principal = round2_(pos_(d.principal, 'Loan amount'));
+  pos_(d.grossWt, 'Weight'); pos_(d.netWt, 'Weight'); pos_(d.ratePct, 'Interest rate');
   req_(principal > 0, 'Enter the loan amount');
   var rate = d.ratePct === '' || d.ratePct === undefined ? num_(settings_().interest_default_rate) : num_(d.ratePct);
   req_(rate >= 0, 'Enter the interest rate');
@@ -94,24 +95,30 @@ function loanPay_(user, d) {
   req_(date >= l.date, 'Date is before the loan date');
   var txns = loanTxns_(l.id);
   var before = Calc.loanStatement(l, txns, date, loanOpts_());
-  var amt = round2_(d.amount);
-  if (type === 'close' && !amt) amt = before.totalDue;
-  req_(amt > 0, 'Enter the amount');
+  var amt = round2_(pos_(d.amount, 'Amount'));
+  if (type === 'close' && !amt && !d.restToBaki) amt = before.totalDue;
+  req_(amt > 0 || (type === 'close' && d.restToBaki), 'Enter the amount');
   var interestPart = 0, principalPart = 0;
   if (type === 'interest') interestPart = amt;
   else if (type === 'part' || type === 'close') {
     interestPart = Math.min(amt, Math.max(before.interestDue, 0));
     principalPart = amt - interestPart;
   }
+  var rest = 0;
   if (type === 'close') {
-    req_(amt >= before.totalDue - 1, 'To close, collect the full ₹' + before.totalDue);
+    req_(amt <= before.totalDue + 1, 'Total due is only ₹' + before.totalDue);
+    rest = Math.round(before.totalDue - amt);
+    req_(rest < 1 || d.restToBaki, 'To close, collect the full ₹' + before.totalDue + ' (or tick "rest to Baki")');
+  } else if (type === 'part' || type === 'interest') {
+    req_(amt <= before.totalDue + 1, 'Total due is only ₹' + before.totalDue + '. Use "Release" to close.');
   }
   var tx = {
     id: uid_('T'), loanId: l.id, date: date, type: type, amount: amt,
     interestPart: round2_(interestPart), principalPart: round2_(principalPart),
     mode: d.mode === 'upi' ? 'upi' : 'cash', by: user.username, at: nowIso_()
   };
-  insert_('LoanTxns', tx);
+  if (amt > 0) insert_('LoanTxns', tx);
+  if (rest >= 1) duesAdd_(user, find_('Customers', l.customerId), rest, 'loan', l.id, 'Girvi released, balance', date);
   if (type === 'topup') {
     cash_(user, 'out', tx.mode, amt, 'girvi-given', 'loan', l.id, l.customerName + ' (top-up)', date);
   } else {

@@ -1,6 +1,6 @@
 /* First-run connect, login, and home. */
 import { call, apiUrl, token } from '../api.js';
-import { S, refresh, modOn, isViewer } from '../state.js';
+import { S, refresh, modOn, isViewer, clearCached } from '../state.js';
 import { h, field, busy, toast, icon, inr, fdate, go } from '../ui.js';
 import { t, getLang, setLang } from '../i18n.js';
 
@@ -54,25 +54,25 @@ export async function home() {
   const r = S.rate;
   const rateStrip = h('a', { class: 'rate-strip' + (r && r.isToday ? '' : ' warn'), href: '#/rate' },
     h('div', null,
-      h('div', { class: 'rate-label' }, r && r.isToday ? t("Today's rate") + ' · per gram' : 'Set today\'s rate'),
+      h('div', { class: 'rate-label' }, r && r.isToday ? t("Today's rate") + ' · ' + t('per gram') : 'Set today\'s rate'),
       r ? h('div', { class: 'rate-vals' },
         h('span', null, '24K ' + inr(r.g24)), h('span', null, '22K ' + inr(r.g22)),
         r.silver ? h('span', null, 'Ag ' + inr(r.silver)) : null) : h('div', { class: 'rate-vals' }, 'No rate yet')),
     h('span', { class: 'rate-edit' }, r && !r.isToday ? 'Rate from ' + fdate(r.date) : t('Edit')));
 
   const tiles = [
-    ['girvi', 'loans', 'lock', 'Girvi Loan', 'गिरवी'],
-    ['sale', 'sale', 'bill', 'New Sale', 'बिक्री'],
-    ['oldgold', 'oldgold', 'swap', 'Buy Old Gold', 'पुराना सोना'],
-    ['orders', 'orders', 'order', 'Orders', 'ऑर्डर'],
-    ['stock', 'stock', 'box', 'Stock', 'स्टॉक'],
-    ['reports', 'reports', 'chart', 'Reports', 'रिपोर्ट']
+    ['girvi', 'loans', 'lock', 'Girvi Loan'],
+    ['sale', 'sale', 'bill', 'New Sale'],
+    ['oldgold', 'oldgold', 'swap', 'Buy Old Gold'],
+    ['orders', 'orders', 'order', 'Orders'],
+    ['stock', 'stock', 'box', 'Stock'],
+    ['reports', 'reports', 'chart', 'Reports']
   ].filter((x) => modOn(x[0]) && !(isViewer() && ['sale', 'oldgold'].includes(x[0])));
   const more = [
     ['repair', 'repairs', 'Repair'], ['sale', 'bills', 'Bills'], ['melt', 'melt', 'Melting'],
     ['wholesaler', 'parties/wholesaler', 'Wholesaler'], ['karigar', 'parties/karigar', 'Karigar'],
-    ['cash', 'cash', 'Cash book']
-  ].filter((x) => modOn(x[0]));
+    ['cash', 'cash', 'Cash book'], ['dues', 'dues', 'Baki (dues)'], ['help', 'help', 'Help']
+  ].filter((x) => x[0] === 'dues' || x[0] === 'help' || modOn(x[0]));
 
   const attention = h('div', { class: 'card attention' }, h('div', { class: 'sec' }, t('Needs attention today')), h('div', { class: 'hint' }, t('Loading…')));
   loadAttention(attention);
@@ -91,9 +91,8 @@ export async function home() {
       h('a', { class: 'search-box', href: '#/search' }, icon('search'), h('span', null, t('Search name, surname, mobile…')))),
     h('main', { class: 'body' },
       rateStrip,
-      h('div', { class: 'tiles' }, tiles.map(([, path, ic, label, hi]) =>
-        h('a', { class: 'tile', href: '#/' + path }, icon(ic, 28),
-          h('span', { class: 'tile-label' }, t(label)), getLang() === 'en' ? h('span', { class: 'tile-sub' }, hi) : null))),
+      h('div', { class: 'tiles' }, tiles.map(([, path, ic, label]) =>
+        h('a', { class: 'tile', href: '#/' + path }, icon(ic, 28), h('span', { class: 'tile-label' }, t(label))))),
       more.length ? h('div', { class: 'pills' }, more.map(([, path, label]) => h('a', { class: 'pill', href: '#/' + path }, t(label)))) : null,
       attention,
       h('div', { class: 'home-foot' },
@@ -105,19 +104,22 @@ async function logout() {
   try { await call('auth.logout'); } catch (e) { /* ignore */ }
   token(null);
   S.user = null;
+  clearCached();
   go('login');
 }
 
 async function loadAttention(box) {
   try {
-    const p = await call('reports.position');
+    const p = await call('home.summary');
     const row = (label, n, href, cls) => h('a', { class: 'att-row', href }, h('span', null, t(label)), h('b', { class: cls || '' }, String(n)));
     box.replaceChildren(h('div', { class: 'sec' }, t('Needs attention today')),
-      modOn('orders') ? row('Order deliveries due', p.orders.dueToday, '#/orders') : null,
-      modOn('orders') && p.orders.late ? row('Late orders', p.orders.late, '#/orders', 'bad') : null,
-      modOn('girvi') ? row('Loans older than 12 months', p.loans.over12Months, '#/loans', p.loans.over12Months ? 'bad' : '') : null,
-      modOn('repair') ? row('Repairs ready to hand over', p.repairs.ready, '#/repairs', 'good') : null);
+      row('Customers with baki (dues)', p.duesCount ? p.duesCount + ' · ' + inr(p.duesTotal) : 0, '#/dues', p.duesCount ? 'bad' : ''),
+      modOn('orders') ? row('Order deliveries due', p.ordersDueToday, '#/orders') : null,
+      modOn('orders') && p.ordersLate ? row('Late orders', p.ordersLate, '#/orders', 'bad') : null,
+      modOn('girvi') ? row('Loans older than 12 months', p.loansOld, '#/loans', p.loansOld ? 'bad' : '') : null,
+      modOn('repair') ? row('Repairs ready to hand over', p.repairsReady, '#/repairs', 'good') : null);
   } catch (e) {
-    box.replaceChildren(h('div', { class: 'sec' }, t('Needs attention today')), h('div', { class: 'hint' }, e.message));
+    box.replaceChildren(h('div', { class: 'sec' }, t('Needs attention today')), h('div', { class: 'hint' }, e.message),
+      h('button', { class: 'btn2 small', onclick: () => loadAttention(box) }, t('Try again')));
   }
 }

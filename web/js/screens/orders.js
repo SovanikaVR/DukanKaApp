@@ -1,7 +1,7 @@
 /* Orders: book with advance (rate fixed now, or only deposit), track, deliver. */
 import { call } from '../api.js';
-import { S, setting, purityFor, rateFor, isViewer } from '../state.js';
-import { h, screen, field, card, grid, seg, busy, toast, num, inr, fdate, g3, sec, go, empty, chips, ask, todayStr, remember } from '../ui.js';
+import { S, setting, purityFor, rateFor, isViewer, isOwner } from '../state.js';
+import { h, screen, field, card, grid, seg, busy, toast, num, inr, fdate, g3, sec, go, empty, chips, ask, todayStr, remember, confirmBox } from '../ui.js';
 import { customerPicker } from '../picker.js';
 import { receiptHtml, docActions } from '../bill.js';
 import { t } from '../i18n.js';
@@ -141,11 +141,33 @@ export async function view({ id }, query) {
     let total = 0;
     try { total = Math.round(Calc.evalFormula(setting('formula_order_total'), { Weight: num(v.finalWt), Rate: r, Making: o.makingPerG })); } catch (e) { /* ignore */ }
     const balance = total - o.paid;
-    const c = await ask('Collect balance', [{ key: 'amount', label: 'Price ' + inr(total) + ' − paid ' + inr(o.paid) + ' = balance', type: 'num', value: String(Math.max(balance, 0)) }], 'Deliver');
-    if (c) run(() => call('orders.deliver', { orderId: id, finalWt: v.finalWt, rate: r, amount: c.amount, mode: v.mode }));
+    if (balance <= 0) {
+      const ok = await confirmBox(t('Deliver'), t('Price') + ' ' + inr(total) + ' − ' + t('paid') + ' ' + inr(o.paid) + '. ' +
+        (balance < 0 ? t('Customer paid extra. Return') + ' ' + inr(-balance) + ' ' + t('to the customer.') : t('Nothing more to collect.')), t('Deliver'));
+      if (ok) run(() => call('orders.deliver', { orderId: id, finalWt: v.finalWt, rate: r, amount: 0, mode: v.mode }));
+      return;
+    }
+    const c = await ask(t('Collect balance'), [{ key: 'amount', label: t('Price') + ' ' + inr(total) + ' − ' + t('paid') + ' ' + inr(o.paid) + ' = ' + t('balance') + ' ' + inr(balance) + '. ' + t('Amount received now (₹)'), type: 'num', value: String(balance) }], t('Deliver'));
+    if (!c) return;
+    const got = num(c.amount);
+    if (got > balance + 1) { toast(t('Balance is only') + ' ' + inr(balance), 'err'); return; }
+    if (got < balance - 1 && !await confirmBox(t('Less than balance'), inr(balance - got) + ' ' + t('will be added to Baki (dues) for this customer.'), t('OK, deliver'))) return;
+    run(() => call('orders.deliver', { orderId: id, finalWt: v.finalWt, rate: r, amount: got, mode: v.mode }));
+  };
+  const editOrder = async () => {
+    const v = await ask(t('Correct this order'), [
+      { key: 'item', label: t('Item'), type: 'text', value: o.item },
+      { key: 'estWt', label: 'Approx weight (g)', type: 'num', value: String(o.estWt) },
+      ...(o.rateFixed ? [{ key: 'rate', label: t('Rate ₹/g'), type: 'num', value: String(o.rate) }] : []),
+      { key: 'makingPerG', label: t('Making ₹/g'), type: 'num', value: String(o.makingPerG) },
+      { key: 'karigarPerG', label: 'Karigar ₹/g', type: 'num', value: String(o.karigarPerG || '') },
+      { key: 'deliveryDate', label: t('Delivery date'), type: 'date', value: o.deliveryDate || '' },
+      { key: 'notes', label: 'Notes', type: 'text', value: o.notes || '' }]);
+    if (v) run(() => call('orders.edit', Object.assign({ id }, v)));
   };
   const cancel = async () => {
-    const v = await ask('Cancel order', [{ key: 'refund', label: 'Advance returned (₹)', type: 'num', value: String(o.paid) }], 'Cancel order');
+    const v = await ask('Cancel order', [{ key: 'refund', label: t('Advance returned (₹)') + ' · ' + t('paid') + ' ' + inr(o.paid), type: 'num', value: String(o.paid) }], 'Cancel order');
+    if (v && num(v.refund) > o.paid) { toast(t('Customer paid only') + ' ' + inr(o.paid), 'err'); return; }
     if (v) run(() => call('orders.status', { orderId: id, status: 'cancelled', refund: v.refund }));
   };
 
@@ -165,7 +187,9 @@ export async function view({ id }, query) {
       o.status === 'booked' ? h('button', { class: 'btn2 small', onclick: toKarigar }, 'Give to karigar') : null,
       o.status === 'booked' || o.status === 'making' ? h('button', { class: 'btn2 small', onclick: ready }, 'Item ready') : null,
       h('button', { class: 'btn2 small danger', onclick: cancel }, 'Cancel order')) : null,
-    acts
+    acts,
+    isOwner() && !closed ? card(h('div', { class: 'sec' }, t('Owner: correct a mistake')),
+      h('div', { class: 'row-actions' }, h('button', { class: 'btn2 small', onclick: editOrder }, t('Edit details')))) : null
   ], !closed && !isViewer() ? h('button', { class: 'btn', onclick: deliver }, 'Deliver & collect balance') : null, { back: '#/orders' });
 }
 void todayStr;

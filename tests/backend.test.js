@@ -176,6 +176,72 @@ test('cancel bill returns stock', () => {
   assert.strictEqual(ok('stock.list', {}, T).length, 1);
 });
 
+test('same save sent twice is saved once (request id)', () => {
+  const n = ok('cash.list', {}, T).entries.length;
+  const a = ok('cash.add', { dir: 'out', amount: 50, notes: 'tea', _rid: 'r-1' }, T);
+  const b = ok('cash.add', { dir: 'out', amount: 50, notes: 'tea', _rid: 'r-1' }, T);
+  assert.strictEqual(a.id, b.id);
+  assert.strictEqual(ok('cash.list', {}, T).entries.length, n + 1);
+});
+
+test('negative amounts are refused', () => {
+  assert.ok(/negative/.test(call('orders.create', { customerId: ganesh.id, method: 'A', estWt: 5, rate: 15000, advance: -500 }, T).error));
+  assert.ok(/negative/.test(call('sale.create', { type: 'EST', customerId: ganesh.id, lines: [{ name: 'Ring', weight: 2, rate: -1 }] }, T).error));
+});
+
+test('baki (dues): bill, order and repair balances in one list, then paid back', () => {
+  const c = ok('customers.save', { firstName: 'Baki', lastName: 'Wala', mobile: '9000000002', village: 'Rampur' }, T);
+  ok('sale.create', { type: 'EST', customerId: c.id, lines: [{ name: 'Ring', weight: 1, rate: 10000 }], cash: 7000, udhaar: 3000 }, T);
+  const o = ok('orders.create', { customerId: c.id, method: 'A', estWt: 2, rate: 10000, makingPerG: 0, advance: 5000 }, T);
+  assert.ok(/only/.test(call('orders.deliver', { orderId: o.id, finalWt: 2, amount: 20000 }, T).error));
+  ok('orders.deliver', { orderId: o.id, finalWt: 2, amount: 10000 }, T);       // 5000 left as baki
+  const r = ok('repairs.create', { customerId: c.id, item: 'Payal', wtIn: 10, custRateType: 'fixed', custRate: 500 }, T);
+  ok('repairs.deliver', { id: r.id, amount: 200 }, T);                          // 300 left as baki
+  let list = ok('dues.list', {}, T);
+  let me = list.list.find((x) => x.customerId === c.id);
+  assert.strictEqual(me.due, 8300);
+  assert.strictEqual(ok('customers.get', { id: c.id }, T).udhaar, 8300);
+  assert.ok(/only/.test(call('dues.pay', { customerId: c.id, amount: 9000 }, T).error));
+  ok('dues.pay', { customerId: c.id, amount: 8300, _rid: 'pay-1' }, T);
+  ok('dues.pay', { customerId: c.id, amount: 8300, _rid: 'pay-1' }, T);        // double tap: ignored
+  list = ok('dues.list', {}, T);
+  assert.ok(!list.list.some((x) => x.customerId === c.id));
+  assert.strictEqual(ok('home.summary', {}, T).duesCount, list.count);
+});
+
+test('selling part of a lot reduces stock; cancel puts it back', () => {
+  ok('stock.add', { items: [{ name: 'Chain lot', category: 'Chain', netWt: 30, pieces: 3, costTotal: 300000 }] }, T);
+  const lot = ok('stock.list', { q: 'chain lot' }, T)[0];
+  const b = ok('sale.create', { type: 'EST', customerId: ganesh.id, lines: [{ itemId: lot.id, weight: 10, pieces: 1, rate: 10000 }], cash: 100000 }, T);
+  let now = ok('stock.list', { q: 'chain lot' }, T)[0];
+  assert.strictEqual(now.netWt, 20); assert.strictEqual(now.pieces, 2); assert.strictEqual(now.costTotal, 200000);
+  ok('sale.void', { id: b.id }, T);
+  now = ok('stock.list', { q: 'chain lot' }, T)[0];
+  assert.strictEqual(now.netWt, 30); assert.strictEqual(now.pieces, 3);
+  ok('stock.update', { id: lot.id, status: 'removed' }, T);
+});
+
+test('owner can correct and cancel old records', () => {
+  const c = ok('customers.save', { firstName: 'Galti', mobile: '9000000003' }, T);
+  const l = ok('loans.create', { customerId: c.id, item: 'Ring', grossWt: 5, principal: 20000, ratePct: 2, date: '2026-09-08' }, T);
+  ok('loans.edit', { id: l.id, principal: 25000, item: 'Gold ring' }, T);
+  ok('loans.pay', { loanId: l.id, type: 'interest', amount: 500, date: '2026-10-08' }, T);
+  assert.ok(/payments/.test(call('loans.edit', { id: l.id, principal: 30000 }, T).error));
+  assert.ok(/payments/.test(call('loans.void', { id: l.id }, T).error));
+  let g2 = ok('loans.undoLast', { id: l.id }, T);
+  assert.strictEqual(g2.txns.length, 0);
+  ok('loans.void', { id: l.id, reason: 'typed twice' }, T);
+  assert.ok(!ok('loans.list', {}, T).some((x) => x.id === l.id));
+  const e = ok('cash.add', { dir: 'out', amount: 777, notes: 'tea' }, T);
+  const before = ok('cash.list', {}, T).closing;
+  ok('cash.void', { id: e.id }, T);
+  assert.strictEqual(ok('cash.list', {}, T).closing, before + 777);
+  const o = ok('orders.create', { customerId: c.id, method: 'A', estWt: 5, rate: 10000, makingPerG: 100 }, T);
+  assert.strictEqual(ok('orders.edit', { id: o.id, estWt: 6 }, T).estTotal, 60600);
+  const E = ok('auth.login', { username: 'ravi', pin: '5678' }).token;
+  assert.ok(/owner/.test(call('cash.void', { id: e.id }, E).error));
+});
+
 test('archive finished year keeps bills searchable', () => {
   const t2 = g.createContext ? null : null; // archive needs a finished year; fake one bill in FY 25-26
   g.insert_('Sales', { id: 'S_OLD', billNo: 'EST/25-26/0009', type: 'EST', fy: '25-26', date: '2026-03-10',

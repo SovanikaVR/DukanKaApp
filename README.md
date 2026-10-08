@@ -6,6 +6,8 @@ All data lives in the shop owner's **own Google Sheet**. There are no servers to
 
 **Setting up a shop:** see **[docs/SETUP.md](docs/SETUP.md)**.
 
+**Using the app (Hindi + English):** see **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**. The same guide is inside the app (Help / मदद, and the **?** on every screen), with short Hindi videos.
+
 ## What it does (version 1)
 
 | Module | What it covers |
@@ -24,6 +26,9 @@ All data lives in the shop owner's **own Google Sheet**. There are no servers to
 | Stock | <ul><li>Pieces or lots by category, value today</li><li>Remove from stock</li><li>Sold items leave stock automatically</li></ul> |
 | Cash book | <ul><li>Every money movement recorded automatically</li><li>Expenses, opening cash, what should be in the drawer</li></ul> |
 | Reports | <ul><li>Today, month and "where things stand"</li><li>Nightly email with a PDF</li><li>Desktop dashboard with a side menu</li></ul> |
+| Baki (dues) | <ul><li>One list of everyone who still owes the shop</li><li>Unpaid money from bills, orders, repairs and girvi lands here by itself</li><li>Part payments; the name drops off when fully paid</li><li>Owner can write off or correct</li></ul> |
+| Fixing mistakes | <ul><li>Owner can cancel a bill, edit or cancel a girvi, undo the last girvi payment, edit orders, repairs and stock items, and remove a wrong expense</li><li>The cash book is corrected with it; every change is logged in the Audit tab</li></ul> |
+| Help | <ul><li>Step-by-step guide for every module in Hindi and English</li><li>Short Hindi videos with captions</li></ul> |
 | Settings | <ul><li>Shop details and GSTIN</li><li>Standard values</li><li>**Modules on/off**</li><li>**Admin-editable formulas** with a test box</li><li>Users with owner / employee / view-only roles and PIN login</li></ul> |
 
 Old entries always keep the formula and rates they were made with.
@@ -45,10 +50,11 @@ tools/build.js  builds dist/ and copies calc.js into the app
 - The Apps Script web app answers `POST {action, token, data}`.
 - PIN logins create 30-day sessions.
 - Writes go through a lock, so 2–4 people can work at the same time.
+- Every save carries a request id, so a double tap or a retry on slow internet never saves twice.
 - Every sheet cell is plain text, so Sheets never changes dates or numbers.
 
 **Data**
-- One spreadsheet per shop, with these tabs: Settings, Users, Rates, Customers, Items, Sales, OldGold, Loans, LoanTxns, Orders, OrderPayments, Repairs, Melts, FineLedger, Parties, PartyLedger, Cash, Audit.
+- One spreadsheet per shop, with these tabs: Settings, Users, Rates, Customers, Items, Sales, OldGold, Loans, LoanTxns, Orders, OrderPayments, Repairs, Melts, FineLedger, Parties, PartyLedger, Cash, Dues, Audit.
 - Bills store data, not PDFs. Any PDF can be made again exactly.
 - Finished financial years can be moved to their own file.
 
@@ -58,6 +64,8 @@ tools/build.js  builds dist/ and copies calc.js into the app
 npm test                 # build + formula tests + full backend scenario on a fake Google Sheet
 node tests/dev-server.js # app + backend locally at http://localhost:8787 (owner: viju / 1234)
 node tests/ui.test.js    # click through the main flows in headless Chrome (Playwright)
+node tools/guide.mjs     # rebuild docs/USER_GUIDE.md from web/js/help-content.js
+node tools/video/record.js   # re-record the Hindi help videos into web/videos/ (Playwright + ffmpeg)
 ```
 
 Edit `shared/calc.js` or `apps-script/src/*`, then run `npm run build` and commit `dist/` as well.
