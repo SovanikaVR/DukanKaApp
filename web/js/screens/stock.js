@@ -44,7 +44,7 @@ export async function render(params, query) {
       h('div', { class: 'kv muted' }, h('span', null, i.category + (i.purityPct ? ' · ' + i.purityPct + '%' : '') + (i.pieces > 1 ? ' · ' + i.pieces + ' pcs' : '')),
         h('span', { class: 'row-actions' },
           isOwner() ? h('button', { class: 'link', onclick: () => edit(i) }, t('Edit')) : null,
-          isViewer() ? null : h('button', { class: 'link', onclick: () => remove(i) }, 'Remove'))))) : empty('Nothing here'),
+          isOwner() ? h('button', { class: 'link', onclick: () => remove(i) }, 'Remove') : null)))) : empty('Nothing here'),
     h('div', { class: 'hint' }, t('Selling from stock: in New Sale tap "From stock". Then the item leaves stock by itself (for a lot, only the weight / pieces sold). Items typed by hand in a bill do not change stock.'))
   ], isViewer() ? null : h('a', { class: 'btn', href: '#/stock-add?m=' + metal }, '+ Add stock'));
 }

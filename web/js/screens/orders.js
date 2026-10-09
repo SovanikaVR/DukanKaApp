@@ -11,7 +11,7 @@ const STATUS = { booked: 'Booked', making: 'With karigar', ready: 'Ready', deliv
 export async function list(params, query) {
   const status = query.s || 'pending';
   const tabs = chips([{ label: 'Pending', value: 'pending', on: status === 'pending' }, { label: 'Ready', value: 'ready', on: status === 'ready' },
-    { label: 'Delivered', value: 'delivered', on: status === 'delivered' }], (v) => go('orders?s=' + v));
+    { label: 'Delivered', value: 'delivered', on: status === 'delivered' }, { label: 'Cancelled', value: 'cancelled', on: status === 'cancelled' }], (v) => go('orders?s=' + v, { replace: true }));
   const rows = await call('orders.list', { status });
   const late = (o) => o.deliveryDate && o.deliveryDate < S.today && o.status !== 'delivered';
   const held = rows.reduce((a, o) => a + (o.status !== 'delivered' ? o.paid : 0), 0);
@@ -126,12 +126,13 @@ export async function view({ id }, query) {
     const v = await ask('Item ready', [
       { key: 'finalWt', label: 'Final weight (g)', type: 'num', value: String(o.estWt) },
       ...(o.karigarId ? [{ key: 'fineUsed', label: 'Fine gold used by karigar (g)', type: 'num', value: '' },
-        { key: 'labour', label: 'Karigar labour (₹)', type: 'num', value: String(Math.round(o.estWt * o.karigarPerG)) }] : [])]);
+        { key: 'labour', label: t('Karigar labour (₹)') + ' · ' + t('blank = final weight ×') + ' ₹' + o.karigarPerG + '/g', type: 'num', value: '' }] : [])]);
     if (v) run(() => call('orders.status', Object.assign({ orderId: id, status: 'ready' }, v)));
   };
   const deliver = async () => {
     const fw = o.finalWt || o.estWt;
-    const rate = o.rateFixed ? o.rate : (S.rate ? (o.purityPct >= 99 ? S.rate.g24 : o.purityPct >= 90 ? S.rate.g22 : S.rate.g18) : 0);
+    const rate = o.rateFixed ? o.rate : (!S.rate ? 0 : o.metal === 'silver' ? S.rate.silver
+      : o.purityPct >= 99 ? S.rate.g24 : o.purityPct >= 90 ? S.rate.g22 : S.rate.g18);
     const v = await ask('Deliver', [
       { key: 'finalWt', label: 'Final weight (g)', type: 'num', value: String(fw) },
       ...(o.rateFixed ? [] : [{ key: 'rate', label: 'Today\'s rate ₹/g', type: 'num', value: String(rate || '') }]),
@@ -175,18 +176,21 @@ export async function view({ id }, query) {
     query.new ? h('div', { class: 'ok-box' }, 'Order booked. Send the receipt below.') : null,
     card(
       h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Approx weight'), h('span', null, g3(o.estWt) + ' g')),
+      o.finalWt ? h('div', { class: 'kv' }, h('span', { class: 'muted' }, t('Final weight')), h('span', null, g3(o.finalWt) + ' g')) : null,
+      o.toBaki > 0 ? h('div', { class: 'kv bad' }, h('span', null, t('Left as baki')), h('span', null, inr(o.toBaki))) : null,
+      o.refunded > 0 ? h('div', { class: 'kv' }, h('span', { class: 'muted' }, t('Returned to customer')), h('span', null, inr(o.refunded))) : null,
       h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Rate'), h('span', null, o.rateFixed ? inr(o.rate) + '/g fixed' : 'Not fixed yet')),
       o.rateFixed ? h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Price'), h('span', null, inr(o.finalTotal || o.estTotal))) : null,
       h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Making / karigar ₹/g'), h('span', null, o.makingPerG + ' / ' + (o.karigarPerG || '—'))),
       h('div', { class: 'kv strong' }, h('span', null, 'Paid'), h('span', null, inr(o.paid))),
       o.balance !== null && !closed ? h('div', { class: 'kv' }, h('span', { class: 'muted' }, t('Balance')), h('span', null, inr(o.balance))) : null,
       h('div', { class: 'kv' }, h('span', { class: 'muted' }, t('Delivery date')), h('span', null, o.deliveryDate ? fdate(o.deliveryDate) : '—'))),
-    o.payments.length ? card(h('div', { class: 'sec' }, 'PAYMENTS'), o.payments.map((p) => h('div', { class: 'kv' }, h('span', null, fdate(p.date) + ' · ' + p.mode), h('span', null, inr(p.amount))))) : null,
+    o.payments.length ? card(h('div', { class: 'sec' }, 'PAYMENTS'), o.payments.map((p) => h('div', { class: 'kv' }, h('span', null, fdate(p.date) + ' · ' + t(p.mode === 'upi' ? 'UPI' : 'Cash') + (p.amount < 0 ? ' · ' + t('returned') : '')), h('span', null, inr(p.amount))))) : null,
     !closed && !isViewer() ? h('div', { class: 'grid g2' },
       h('button', { class: 'btn2 small', onclick: payMore }, o.rateFixed ? '+ Payment' : '+ Payment / fix rate'),
       o.status === 'booked' ? h('button', { class: 'btn2 small', onclick: toKarigar }, 'Give to karigar') : null,
       o.status === 'booked' || o.status === 'making' ? h('button', { class: 'btn2 small', onclick: ready }, 'Item ready') : null,
-      h('button', { class: 'btn2 small danger', onclick: cancel }, 'Cancel order')) : null,
+      isOwner() ? h('button', { class: 'btn2 small danger', onclick: cancel }, 'Cancel order') : null) : null,
     acts,
     isOwner() && !closed ? card(h('div', { class: 'sec' }, t('Owner: correct a mistake')),
       h('div', { class: 'row-actions' }, h('button', { class: 'btn2 small', onclick: editOrder }, t('Edit details')))) : null

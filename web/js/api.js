@@ -33,6 +33,11 @@ const READS = new Set(['ping', 'bootstrap', 'rates.list', 'customers.search', 'c
   'melt.list', 'fine.summary', 'parties.list', 'parties.ledger', 'cash.list', 'reports.daily', 'reports.month',
   'reports.position', 'users.list', 'dues.list', 'home.summary', 'auth.login', 'auth.logout']);
 
+let pendingRid = null;
+let lost = null;
+/** The next save uses this request id (set by the form's Save button, see ui.busy). */
+export function useRid(r) { pendingRid = r; }
+
 const newRid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
 
 async function post(target, payload, ms) {
@@ -59,17 +64,26 @@ export async function call(action, data = {}, url) {
   const target = url || apiUrl();
   if (!target) throw new ApiError('App is not connected to a shop yet');
   const isSave = !READS.has(action);
-  const payload = { action, token: token(), data: isSave ? Object.assign({ _rid: newRid() }, data) : data };
+  let rid = null;
+  const sig = isSave ? action + '|' + JSON.stringify(data) : '';
+  if (isSave) {
+    // Exactly the same save as one whose reply was lost: send the same id, so it is not saved twice.
+    rid = pendingRid || (lost && lost.sig === sig && Date.now() - lost.at < 120000 ? lost.rid : newRid());
+    pendingRid = null;
+  }
+  const payload = { action, token: token(), data: isSave ? Object.assign({ _rid: rid }, data) : data };
   let body = null, lastErr = null;
   for (let attempt = 0; attempt < 2 && !body; attempt++) {
     try {
-      body = await post(target, payload, isSave ? 60000 : 45000);
+      body = await post(target, payload, isSave ? 45000 : 30000);
     } catch (e) {
       lastErr = e;
+      if (e && e.name === 'AbortError') break; // already waited long enough: tell the user
       if (attempt === 0) await new Promise((r) => setTimeout(r, 1500));
     }
   }
   if (!body) {
+    if (isSave) lost = { sig, rid, at: Date.now() };
     if (lastErr && lastErr.name === 'AbortError') throw new ApiError('Internet is very slow. Please check and try again.');
     if (lastErr instanceof SyntaxError) throw new ApiError('The shop link did not answer correctly. Check the web app link in Settings.');
     throw new ApiError('No internet, or the shop link is wrong. Please try again.');
@@ -82,5 +96,7 @@ export async function call(action, data = {}, url) {
     }
     throw new ApiError(body.error || 'Something went wrong');
   }
+  if (isSave && lost && lost.sig === sig) lost = null;
+  if (body.data && body.data._saved === true) throw new ApiError('This was already saved. Please open the list to see it.');
   return body.data;
 }

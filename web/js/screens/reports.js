@@ -1,6 +1,7 @@
 /* Reports: today, this month, where things stand. Works on phone and as the computer dashboard. */
 import { call } from '../api.js';
 import { S, modOn } from '../state.js';
+import { t } from '../i18n.js';
 import { h, screen, field, inr, fdate, g3, go, chips, toast } from '../ui.js';
 import { downloadPdf, sharePdf, docCss } from '../bill.js';
 
@@ -25,13 +26,14 @@ async function today(dateQ) {
   const html = () => reportHtml(d);
   return h('div', { class: 'stack wide-grid' },
     pick,
-    h('div', { class: 'card' },
-      h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Profit · ' + fdate(date)), h('b', { class: 'big ' + (d.profit >= 0 ? 'good' : 'bad') }, inr(d.profit))),
+    d.parts === null ? null : h('div', { class: 'card' },
+      h('div', { class: 'kv' }, h('span', { class: 'muted' }, t('Profit') + ' · ' + fdate(date)), h('b', { class: 'big ' + (d.profit >= 0 ? 'good' : 'bad') }, inr(d.profit))),
       kvRow('Sales (' + d.sales.count + ' bills' + (d.unknownCostLines ? ', making only where cost is not known' : '') + ')', inr(d.parts.sales)),
       modOn('girvi') ? kvRow('Girvi interest received', inr(d.parts.interest)) : null,
       modOn('repair') ? kvRow('Repair profit', inr(d.parts.repair)) : null,
       modOn('orders') ? kvRow('Order making profit', inr(d.parts.making)) : null,
       modOn('melt') ? kvRow('Melting gain', inr(d.parts.melting)) : null,
+      d.parts.other ? kvRow('Other income', inr(d.parts.other)) : null,
       kvRow('Expenses', '− ' + inr(d.parts.expenses))),
     h('div', { class: 'card' }, h('div', { class: 'sec' }, 'CASH'),
       kvRow('Opening', inr(d.cash.opening)), kvRow('In', '+ ' + inr(d.cash.cashIn)), kvRow('Out', '− ' + inr(d.cash.cashOut)),
@@ -39,7 +41,7 @@ async function today(dateQ) {
     h('div', { class: 'card' }, h('div', { class: 'sec' }, 'WORK DONE'),
       kvRow('Bills', d.sales.count + ' (' + d.sales.gst + ' GST) · ' + inr(d.sales.total)),
       modOn('girvi') ? kvRow('New girvi', d.loans.newCount + ' · ' + inr(d.loans.newAmount) + ' · released ' + d.loans.closed) : null,
-      modOn('oldgold') ? kvRow('Old gold bought', g3(d.oldGold.weight) + ' g · ' + inr(d.oldGold.amount)) : null,
+      modOn('oldgold') ? kvRow('Old gold bought', g3(d.oldGold.weight) + ' g' + (d.oldGold.silverWeight ? ' + ' + t('silver') + ' ' + g3(d.oldGold.silverWeight) + ' g' : '') + ' · ' + inr(d.oldGold.amount)) : null,
       modOn('orders') ? kvRow('Orders booked / delivered', d.orders.booked + ' / ' + d.orders.delivered) : null),
     h('div', { class: 'grid g2' },
       h('button', { class: 'btn', onclick: () => sharePdf(html(), 'report-' + date + '.pdf', S.settings.shop_name + ' report ' + fdate(date)).catch((e) => toast(e.message, 'err')) }, 'Share on WhatsApp'),
@@ -52,15 +54,16 @@ async function month(mq) {
   const pick = field('Month', { value: m });
   pick.input.type = 'month';
   pick.input.addEventListener('change', () => go('reports?t=month&m=' + pick.input.value));
+  if (r.parts === null) return h('div', { class: 'stack' }, pick, h('div', { class: 'hint' }, t('Profit is shown only to the owner.')));
   const max = Math.max(1, ...r.days.map((d) => Math.abs(d.profit)));
   return h('div', { class: 'stack' }, pick,
     h('div', { class: 'card' },
-      h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Profit this month'), h('b', { class: 'big' }, inr(r.profit))),
+      h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Profit this month'), h('b', { class: 'big ' + (r.profit >= 0 ? 'good' : 'bad') }, inr(r.profit))),
       kvRow('Sales', inr(r.parts.sales)), kvRow('Girvi interest', inr(r.parts.interest)), kvRow('Repair', inr(r.parts.repair)),
-      kvRow('Order making', inr(r.parts.making)), kvRow('Melting', inr(r.parts.melting)), kvRow('Expenses', '− ' + inr(r.parts.expenses))),
+      kvRow('Order making', inr(r.parts.making)), kvRow('Melting', inr(r.parts.melting)), r.parts.other ? kvRow('Other income', inr(r.parts.other)) : null, kvRow('Expenses', '− ' + inr(r.parts.expenses))),
     h('div', { class: 'card' }, h('div', { class: 'sec' }, 'PROFIT BY DAY'),
       h('div', { class: 'bars', role: 'img', 'aria-label': 'Profit by day' }, r.days.map((d) => h('div', { class: 'bar', title: fdate(d.date) + ': ' + inr(d.profit) },
-        h('span', { class: 'bar-v' }, d.profit ? Math.round(d.profit / 1000) + 'k' : ''),
+        h('span', { class: 'bar-v' }, !d.profit ? '' : Math.abs(d.profit) < 1000 ? String(Math.round(d.profit)) : (Math.round(d.profit / 100) / 10) + 'k'),
         h('div', { class: 'bar-fill' + (d.profit < 0 ? ' neg' : ''), style: { height: Math.round(Math.abs(d.profit) / max * 140) + 'px' } }),
         h('span', { class: 'bar-l' }, String(+d.date.slice(8))))))));
 }
@@ -101,7 +104,7 @@ async function position() {
 function reportHtml(d) {
   const r = (a, b) => `<div class="kv"><span>${a}</span><span>${b}</span></div>`;
   return `<style>${docCss()}</style><div class="doc a4"><div class="hd"><div><div class="shop">${S.settings.shop_name}</div></div><div class="r"><div class="title">DAILY REPORT</div><div>${fdate(d.date)}</div></div></div>
-  <div class="sum wide">${r('<b>Profit</b>', '<b>₹' + Calc.inr(d.profit) + '</b>')}${r('Sales (' + d.sales.count + ' bills)', '₹' + Calc.inr(d.parts.sales))}${r('Girvi interest', '₹' + Calc.inr(d.parts.interest))}
-  ${r('Repair profit', '₹' + Calc.inr(d.parts.repair))}${r('Order making', '₹' + Calc.inr(d.parts.making))}${r('Melting gain', '₹' + Calc.inr(d.parts.melting))}${r('Expenses', '−₹' + Calc.inr(d.parts.expenses))}
-  <br>${r('Cash opening', '₹' + Calc.inr(d.cash.opening))}${r('Cash in / out', '₹' + Calc.inr(d.cash.cashIn) + ' / ₹' + Calc.inr(d.cash.cashOut))}${r('<b>Cash in drawer</b>', '<b>₹' + Calc.inr(d.cash.closing) + '</b>')}${r('UPI in / out', '₹' + Calc.inr(d.cash.upiIn) + ' / ₹' + Calc.inr(d.cash.upiOut))}</div></div>`;
+  <div class="sum wide">${d.parts ? r('<b>Profit</b>', '<b>₹' + Calc.inr(d.profit) + '</b>') + r('Sales (' + d.sales.count + ' bills)', '₹' + Calc.inr(d.parts.sales)) + r('Girvi interest', '₹' + Calc.inr(d.parts.interest)) +
+  r('Repair profit', '₹' + Calc.inr(d.parts.repair)) + r('Order making', '₹' + Calc.inr(d.parts.making)) + r('Melting gain', '₹' + Calc.inr(d.parts.melting)) + r('Other income', '₹' + Calc.inr(d.parts.other || 0)) + r('Expenses', '−₹' + Calc.inr(d.parts.expenses)) + '<br>' : ''}
+  ${r('Cash opening', '₹' + Calc.inr(d.cash.opening))}${r('Cash in / out', '₹' + Calc.inr(d.cash.cashIn) + ' / ₹' + Calc.inr(d.cash.cashOut))}${r('<b>Cash in drawer</b>', '<b>₹' + Calc.inr(d.cash.closing) + '</b>')}${r('UPI in / out', '₹' + Calc.inr(d.cash.upiIn) + ' / ₹' + Calc.inr(d.cash.upiOut))}</div></div>`;
 }

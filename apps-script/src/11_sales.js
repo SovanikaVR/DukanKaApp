@@ -1,10 +1,13 @@
 /* ---------- Sales (GST bill / estimate) and old gold ---------- */
 
 function oldGoldCalc_(g) {
-  var weight = num_(g.weight);
-  var cut = num_(g.cutPct);
-  var rate = num_(g.rate);
-  var purity = g.ourPurityPct === '' || g.ourPurityPct === undefined ? num_(settings_().standard_purity_pct) : num_(g.ourPurityPct);
+  var weight = pos_(g.weight, 'Old gold weight');
+  var cut = pos_(g.cutPct, 'Cut %');
+  var rate = pos_(g.rate, 'Rate');
+  var purity = g.ourPurityPct === '' || g.ourPurityPct === undefined ? num_(settings_().standard_purity_pct) : pos_(g.ourPurityPct, 'Purity');
+  req_(cut <= 100, 'Cut % should be between 0 and 100');
+  req_(purity <= 100, 'Purity % should be between 0 and 100');
+  pos_(g.amount, 'Old gold amount');
   var customerFine = round3_(Calc.evalFormula(formula_('formula_old_fine'), { Weight: weight, Cut: cut }));
   var ourFine = round3_(Calc.evalFormula(formula_('formula_our_fine'), { Weight: weight, Purity: purity }));
   var amount = g.amount !== undefined && g.amount !== '' ? Math.round(num_(g.amount)) : Math.round(customerFine * rate);
@@ -33,9 +36,20 @@ function saleCreate_(user, d) {
     req_(s.shop_gstin, 'Add the shop GSTIN in Settings before making a GST bill');
   }
   var date = validDate_(d.date);
+  req_(!s['archive_' + fyOf_(date)], 'Year ' + fyOf_(date) + ' is closed (archived). Use a date in the current year.');
+  // Only fully empty lines are skipped; a line with a name or a stock item but no weight is a mistake.
+  var lines = (d.lines || []).filter(function (l) {
+    return l.itemId || num_(l.weight) || num_(l.amount) || String(l.name || '').trim() && String(l.name).trim() !== 'Item';
+  });
+  req_(lines.length, 'Add at least one item. (To only buy old gold, use "Buy old gold".)');
+  var seen = {};
+  lines.forEach(function (l) {
+    req_(num_(l.weight) > 0 || (!l.itemId && num_(l.amount) > 0), 'Enter the weight for ' + (String(l.name || '').trim() || 'each item'));
+    if (l.itemId) { req_(!seen[l.itemId], 'The same stock item is twice in this bill'); seen[l.itemId] = 1; }
+  });
+  var gstIn = d.gstPct !== undefined && d.gstPct !== '' ? num_(d.gstPct) : null;
+  req_(gstIn === null || (gstIn >= 0 && gstIn <= 28), 'GST % should be between 0 and 28');
   var c = ensureCustomer_(user, d);
-  var lines = (d.lines || []).filter(function (l) { return num_(l.weight) > 0 || num_(l.amount) > 0; });
-  req_(lines.length, 'Add at least one item');
   var saleFormula = formula_('formula_sale_line');
   var subtotal = 0, costTotal = 0, namesToSave = [];
   var cleanLines = lines.map(function (l) {
@@ -49,15 +63,26 @@ function saleCreate_(user, d) {
     var amount = l.amount !== undefined && l.amount !== '' && !w ? num_(l.amount)
       : round2_(Calc.evalFormula(saleFormula, { Weight: w, Rate: rate, Making: mk }));
     subtotal += amount;
-    // A lot (many pieces / loose weight) can be sold in part: only what was sold leaves stock.
+    // A lot (many pieces, or loose weight) is sold from: only the weight / pieces sold leave stock,
+    // and that part is remembered on the bill so cancelling puts back exactly that.
     var part = null;
     if (item) {
       var lotWt = num_(item.netWt), lotPcs = num_(item.pieces) || 1;
-      var soldWt = w > 0 ? Math.min(w, lotWt) : lotWt;
-      var soldPcs = lotPcs > 1 ? Math.max(1, Math.round(num_(l.pieces) || 1)) : 1;
-      req_(soldPcs <= lotPcs, 'Only ' + lotPcs + ' pieces left in ' + (item.tag || item.name));
-      if (soldWt < lotWt - 0.0005 || soldPcs < lotPcs) part = { wt: round3_(soldWt), pcs: soldPcs,
-        cost: round2_(num_(item.costTotal) * soldWt / (lotWt || 1)) };
+      var name = item.tag || item.name;
+      // A single piece weighed again at the counter can differ a little: that is still the whole piece.
+      var tol = lotPcs === 1 ? Math.max(0.1, lotWt * 0.02) : 0.0005;
+      req_(w <= lotWt + tol, 'Only ' + round3_(lotWt) + ' g left in ' + name);
+      var isLot = lotPcs > 1 || w < lotWt - tol;
+      if (isLot) {
+        var soldPcs = lotPcs > 1 ? Math.max(1, Math.round(num_(l.pieces) || 1)) : 0;
+        req_(soldPcs <= lotPcs, 'Only ' + lotPcs + ' pieces left in ' + name);
+        if (lotPcs > 1) {
+          var allPcs = soldPcs === lotPcs, allWt = w >= lotWt - 0.0005;
+          req_(allPcs === allWt, allPcs ? 'Selling all ' + lotPcs + ' pieces of ' + name + ': the weight should be ' + round3_(lotWt) + ' g'
+            : 'The whole weight of ' + name + ' is ' + round3_(lotWt) + ' g — enter the weight of the ' + soldPcs + ' piece(s) sold');
+        }
+        part = { wt: round3_(Math.min(w, lotWt)), pcs: soldPcs, cost: round2_(num_(item.costTotal) * Math.min(w, lotWt) / (lotWt || 1)) };
+      }
     }
     var cost = item ? (part ? part.cost : num_(item.costTotal)) : 0;
     costTotal += cost;
@@ -70,7 +95,7 @@ function saleCreate_(user, d) {
     };
   });
   subtotal = round2_(subtotal);
-  var gstPct = type === 'GST' ? (d.gstPct !== undefined && d.gstPct !== '' ? num_(d.gstPct) : num_(s.gst_default_pct)) : 0;
+  var gstPct = type === 'GST' ? (gstIn !== null ? gstIn : num_(s.gst_default_pct)) : 0;
   var tax = round2_(subtotal * gstPct / 100);
   var invoiceTotal = Math.round(subtotal + tax);
   var roundOff = round2_(invoiceTotal - subtotal - tax);
@@ -104,11 +129,11 @@ function saleCreate_(user, d) {
     if (l.part) {
       var it = find_('Items', l.itemId);
       var left = round3_(num_(it.netWt) - l.part.wt);
-      var pcsLeft = (num_(it.pieces) || 1) - l.part.pcs;
+      var pcsLeft = num_(it.pieces) - l.part.pcs;
       update_('Items', l.itemId, {
         netWt: Math.max(left, 0), grossWt: round3_(Math.max(0, num_(it.grossWt) - l.part.wt)), pieces: Math.max(pcsLeft, 0),
-        costTotal: round2_(num_(it.costTotal) - l.part.cost),
-        status: left <= 0.0005 || pcsLeft <= 0 ? 'sold' : 'in', soldBillId: id
+        costTotal: round2_(Math.max(0, num_(it.costTotal) - l.part.cost)),
+        status: left <= 0.0005 ? 'sold' : 'in', soldBillId: id
       });
     } else update_('Items', l.itemId, { status: 'sold', soldBillId: id });
   });
@@ -178,6 +203,7 @@ function saleList_(d) {
   var q = String(d.q || '').toLowerCase();
   var source = (d.fy && archivedSales_(d.fy)) || rows_('Sales');
   var list = source.filter(function (b) {
+    if (d.fy && b.fy !== d.fy) return false;
     if (b.date < from || b.date > to) return false;
     if (d.type && b.type !== d.type) return false;
     if (q && (b.customerName + ' ' + b.billNo + ' ' + b.mobile).toLowerCase().indexOf(q) < 0) return false;
@@ -195,6 +221,15 @@ function saleVoid_(user, d) {
   var b = find_('Sales', d.id);
   req_(b, 'Bill not found');
   req_(b.status !== 'void', 'Bill is already cancelled');
+  // Check everything first: Apps Script cannot roll back half-done changes.
+  var olds = rows_('OldGold').filter(function (g) { return g.billId === b.id && g.status !== 'void'; });
+  olds.forEach(function (g) { req_(g.status !== 'melted', 'Old gold from this bill is already melted; cannot cancel'); });
+  var cust = find_('Customers', b.customerId);
+  var udhaar = num_(b.udhaar);
+  // If the customer already paid back part of this bill's baki, that money is returned to them now.
+  var stillDue = udhaar > 0 && cust ? Math.min(udhaar, Math.max(customerUdhaar_(cust.id), 0)) : 0;
+  var paidBack = round2_(udhaar - stillDue);
+
   update_('Sales', b.id, { status: 'void' });
   json_(b.lines, []).forEach(function (l) {
     if (!l.itemId) return;
@@ -202,24 +237,19 @@ function saleVoid_(user, d) {
     if (!it) return;
     if (l.part) {
       update_('Items', l.itemId, { status: 'in', netWt: round3_(num_(it.netWt) + l.part.wt),
-        grossWt: round3_(num_(it.grossWt) + l.part.wt), pieces: num_(it.pieces) + l.part.pcs,
-        costTotal: round2_(num_(it.costTotal) + l.part.cost) });
+        grossWt: round3_(num_(it.grossWt) + l.part.wt), pieces: num_(it.pieces) + num_(l.part.pcs),
+        costTotal: round2_(num_(it.costTotal) + num_(l.part.cost)) });
     } else update_('Items', l.itemId, { status: 'in', soldBillId: '' });
   });
-  if (num_(b.udhaar) > 0) {
-    var cust = find_('Customers', b.customerId);
-    if (cust) duesAdd_(user, cust, -num_(b.udhaar), 'sale-cancel', b.id, 'Cancelled ' + b.billNo);
-  }
-  rows_('OldGold').filter(function (g) { return g.billId === b.id; }).forEach(function (g) {
-    req_(g.status !== 'melted', 'Old gold from this bill is already melted; cannot cancel');
-    update_('OldGold', g.id, { status: 'void' });
-  });
+  if (stillDue > 0) duesAdd_(user, cust, -stillDue, 'sale-cancel', b.id, 'Cancelled ' + b.billNo);
+  olds.forEach(function (g) { update_('OldGold', g.id, { status: 'void' }); });
   var net = num_(b.net);
   var dir = net >= 0 ? 'out' : 'in';
   cash_(user, dir, 'cash', num_(b.cash), 'sale-cancel', 'sale', b.id, 'Cancelled ' + b.billNo);
   cash_(user, dir, 'upi', num_(b.upi), 'sale-cancel', 'sale', b.id, 'Cancelled ' + b.billNo);
-  audit_(user, 'sale.void', b.id, { billNo: b.billNo, reason: d.reason || '' });
-  return { ok: true };
+  if (paidBack >= 1) cash_(user, 'out', 'cash', paidBack, 'sale-cancel', 'sale', b.id, 'Cancelled ' + b.billNo + ': baki already paid, returned');
+  audit_(user, 'sale.void', b.id, { billNo: b.billNo, reason: d.reason || '', returned: paidBack });
+  return { ok: true, returned: paidBack };
 }
 
 function salePayUdhaar_(user, d) { return duesPay_(user, d); }

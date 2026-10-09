@@ -1,7 +1,13 @@
 /* ---------- Orders (advance booking) ---------- */
 
+var _payIndex = null;
 function orderPayments_(orderId) {
-  return rows_('OrderPayments').filter(function (p) { return p.orderId === orderId; }).map(function (p) {
+  // Built once per request (cleared when a payment is added): lists of many orders stay fast.
+  if (!_payIndex || _payIndex.rows !== rows_('OrderPayments')) {
+    _payIndex = { rows: rows_('OrderPayments'), by: {} };
+    _payIndex.rows.forEach(function (p) { (_payIndex.by[p.orderId] = _payIndex.by[p.orderId] || []).push(p); });
+  }
+  return (_payIndex.by[orderId] || []).map(function (p) {
     return { id: p.id, date: p.date, amount: num_(p.amount), mode: p.mode, by: p.by };
   });
 }
@@ -12,7 +18,8 @@ function orderTotalFor_(weight, rate, making) {
 
 function orderSummary_(o) {
   var pays = orderPayments_(o.id);
-  var paid = pays.reduce(function (a, p) { return a + p.amount; }, 0);
+  var paid = pays.reduce(function (a, p) { return a + p.amount; }, 0); // refunds are stored as minus payments
+  var refunded = -pays.reduce(function (a, p) { return a + (p.amount < 0 ? p.amount : 0); }, 0);
   var rateFixed = num_(o.rate) > 0;
   var estTotal = rateFixed ? (num_(o.fixedTotal) || orderTotalFor_(num_(o.estWt), num_(o.rate), num_(o.makingPerG))) : 0;
   return {
@@ -22,7 +29,9 @@ function orderSummary_(o) {
     rate: num_(o.rate), rateFixed: rateFixed, fixedTotal: num_(o.fixedTotal), estTotal: estTotal,
     deliveryDate: o.deliveryDate, status: o.status, karigarId: o.karigarId,
     finalWt: num_(o.finalWt), finalTotal: num_(o.finalTotal), deliveredAt: o.deliveredAt,
-    notes: o.notes, payments: pays, paid: paid,
+    notes: o.notes, payments: pays, paid: paid, refunded: refunded,
+    toBaki: o.status === 'delivered' ? rows_('Dues').filter(function (x) { return x.refType === 'order' && x.refId === o.id; })
+      .reduce(function (a, x) { return a + num_(x.amount); }, 0) : 0,
     balance: o.status === 'delivered' ? 0 : (rateFixed ? estTotal - paid : null)
   };
 }
@@ -104,20 +113,27 @@ function orderPay_(user, d) {
 function orderStatus_(user, d) {
   var o = find_('Orders', d.orderId);
   req_(o, 'Order not found');
+  req_(o.status !== 'delivered' && o.status !== 'cancelled', 'This order is already ' + o.status);
   var date = validDate_(d.date);
   var patch = { status: d.status };
+  var allowed = { making: ['booked'], ready: ['booked', 'making'], cancelled: ['booked', 'making', 'ready'], booked: ['making'] };
+  req_(allowed[d.status], 'Unknown status');
+  req_(allowed[d.status].indexOf(o.status) >= 0, 'Order is "' + o.status + '" — cannot change it to "' + d.status + '"');
+  if (d.status === 'cancelled') req_(user.role === 'owner', 'Only the owner can cancel an order');
   if (d.status === 'making') {
     if (d.karigarId) {
       patch.karigarId = d.karigarId;
-      var g = round3_(d.issueFineG);
+      var g = round3_(pos_(d.issueFineG, 'Fine gold'));
       if (g > 0) issueFineToKarigar_(user, d.karigarId, g, 'order', o.id, 'For order: ' + o.item + ' (' + o.customerName + ')', date);
     }
   } else if (d.status === 'ready') {
-    if (num_(d.finalWt) > 0) patch.finalWt = round3_(d.finalWt);
+    if (num_(d.finalWt) > 0) patch.finalWt = round3_(pos_(d.finalWt, 'Weight'));
     var kid = d.karigarId || o.karigarId;
     if (kid) {
       var fw = num_(d.finalWt) || num_(o.estWt);
-      var labour = d.labour !== undefined && d.labour !== '' ? round2_(d.labour) : round2_(fw * num_(o.karigarPerG));
+      var labour = d.labour !== undefined && d.labour !== '' ? round2_(pos_(d.labour, 'Labour')) : round2_(fw * num_(o.karigarPerG));
+      pos_(d.fineUsed, 'Fine gold used');
+      patch.karigarId = kid;
       insert_('PartyLedger', {
         id: uid_('Y'), partyId: kid, date: date, type: 'job_done', goldG: -round3_(d.fineUsed), cash: labour,
         rate: '', refType: 'order', refId: o.id, notes: o.item + ' for ' + o.customerName, by: user.username, at: nowIso_()
@@ -126,10 +142,12 @@ function orderStatus_(user, d) {
   } else if (d.status === 'cancelled') {
     var refund = round2_(pos_(d.refund, 'Refund'));
     var paidSoFar = orderPayments_(o.id).reduce(function (a, p) { return a + p.amount; }, 0);
-    req_(refund <= paidSoFar + 1, 'Customer paid only ₹' + Math.round(paidSoFar));
-    if (refund > 0) cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', refund, 'order-refund', 'order', o.id, o.customerName, date);
-  } else {
-    req_(d.status === 'booked', 'Unknown status');
+    req_(refund <= round2_(paidSoFar), 'Customer paid only ₹' + Math.round(paidSoFar));
+    if (refund > 0) {
+      var rmode = d.mode === 'upi' ? 'upi' : 'cash';
+      insert_('OrderPayments', { id: uid_('P'), orderId: o.id, date: date, amount: -refund, mode: rmode, by: user.username, at: nowIso_() });
+      cash_(user, 'out', rmode, refund, 'order-refund', 'order', o.id, o.customerName, date);
+    }
   }
   update_('Orders', o.id, patch);
   audit_(user, 'order.status', o.id, patch);
@@ -161,6 +179,14 @@ function orderDeliver_(user, d) {
     duesAdd_(user, cust, due, 'order', o.id, 'Order: ' + o.item, date);
   }
   if (balance < 0) cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', -balance, 'order-refund', 'order', o.id, 'Extra advance returned', date);
+  // Went straight from the karigar to the customer ("Item ready" skipped): book the karigar's labour now.
+  if (o.karigarId && o.status !== 'ready') {
+    var booked = rows_('PartyLedger').some(function (x) { return x.refType === 'order' && x.refId === o.id && x.type === 'job_done'; });
+    if (!booked) insert_('PartyLedger', {
+      id: uid_('Y'), partyId: o.karigarId, date: date, type: 'job_done', goldG: 0, cash: round2_(finalWt * num_(o.karigarPerG)),
+      rate: '', refType: 'order', refId: o.id, notes: o.item + ' for ' + o.customerName, by: user.username, at: nowIso_()
+    });
+  }
   update_('Orders', o.id, {
     status: 'delivered', finalWt: finalWt, finalTotal: total, rate: rate, deliveredAt: date
   });
@@ -213,6 +239,7 @@ function repairReturn_(user, d) {
   var r = find_('Repairs', d.id);
   req_(r, 'Repair not found');
   req_(r.status !== 'delivered', 'Already given back');
+  req_(r.status !== 'ready', 'Already back from the karigar');
   var cost = d.karigarCost !== undefined && d.karigarCost !== '' ? round2_(pos_(d.karigarCost, 'Karigar cost'))
     : repairAmount_(r.karigarRateType, r.karigarRate, r.wtIn);
   var date = validDate_(d.date);
@@ -247,9 +274,19 @@ function repairDeliver_(user, d) {
   if (charge - got >= 1) duesAdd_(user, find_('Customers', r.customerId), Math.round(charge - got), 'repair', r.id, 'Repair: ' + r.item, date);
   var patch = { status: 'delivered', custCharge: charge, deliveredAt: date };
   if (!r.returnedAt) {
+    // Given back without "Back from karigar": book the karigar's cost now so nobody's account is missed.
     patch.returnedAt = date;
     patch.wtOut = r.wtOut || r.wtIn;
-    if (r.karigarCost === '') patch.karigarCost = repairAmount_(r.karigarRateType, r.karigarRate, r.wtIn);
+    var kc = r.karigarCost === '' ? repairAmount_(r.karigarRateType, r.karigarRate, r.wtIn) : num_(r.karigarCost);
+    patch.karigarCost = r.karigarId || kc > 0 ? kc : 0;
+    if (r.karigarId && kc > 0) {
+      insert_('PartyLedger', {
+        id: uid_('Y'), partyId: r.karigarId, date: date, type: 'job_done', goldG: 0, cash: kc, rate: '',
+        refType: 'repair', refId: r.id, notes: r.work + ': ' + r.item + ' (' + r.customerName + ')', by: user.username, at: nowIso_()
+      });
+    } else if (kc > 0) {
+      cash_(user, 'out', 'cash', kc, 'repair-cost', 'repair', r.id, r.item, date);
+    }
   }
   var saved = update_('Repairs', r.id, patch);
   audit_(user, 'repair.deliver', r.id, { charge: charge });

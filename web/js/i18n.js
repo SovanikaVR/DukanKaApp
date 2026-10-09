@@ -1,6 +1,6 @@
 /* English by default; one tap switches the screens to Hindi. In English mode no Hindi is shown. */
 
-import { HI as MORE } from './i18n-hi.js';
+import { HI as MORE, HI_PATTERNS } from './i18n-hi.js';
 
 const BASE = {
   'Girvi Loan': 'गिरवी लोन', 'New Sale': 'नई बिक्री', 'Buy Old Gold': 'पुराना सोना', 'Orders': 'ऑर्डर',
@@ -32,6 +32,7 @@ export function t(s) {
   if (HI[s]) return HI[s];
   const k = s.trim();
   if (k !== s && HI[k]) return s.replace(k, HI[k]);
+  for (const [re, hi] of HI_PATTERNS) if (re.test(k)) return k.replace(re, hi);
   return s;
 }
 export function getLang() { return lang; }

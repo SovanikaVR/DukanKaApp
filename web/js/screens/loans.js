@@ -56,13 +56,13 @@ export async function create(params, query) {
   function draw() {
     const r = S.rate || {};
     const w = num(net.input.value);
-    const value = karat === 'Silver' ? w * num(r.silver) : w * num(r.g24) * num(purity.input.value) / 100;
+    const value = karat === 'Silver' ? w * num(r.silver) * (num(purity.input.value) || 100) / 100 : w * num(r.g24) * num(purity.input.value) / 100;
     const ltv = value ? Math.round(num(amount.input.value) / value * 100) : 0;
     valueBox.replaceChildren(h('div', { class: 'sec gold' }, 'ITEM VALUE TODAY'), h('div', { class: 'big' }, inr(value)),
-      h('div', { class: ltv > 75 ? 'bad' : 'muted' }, value ? 'Loan is ' + ltv + '% of value' + (ltv > 75 ? ' — high' : '') : 'Set today\'s rate to see value'));
+      h('div', { class: ltv > 75 ? 'bad' : 'muted' }, value ? t('Loan is') + ' ' + ltv + '% ' + t('of value') + (ltv > 75 ? ' — ' + t('high') : '') : (S.rate && S.rate.g24 ? t('Enter the weight to see value') : t('Set today\'s rate to see value'))));
     let m = 0;
     try { m = Calc.evalFormula(setting('formula_interest'), { Principal: num(amount.input.value), Rate: num(rate.input.value), Days: 30 }); } catch (e) { /* ignore */ }
-    perMonth.textContent = 'Interest ' + inr(m) + ' per month · ' + inr(m / 30) + ' per day';
+    perMonth.textContent = t('Interest') + ' ' + inr(m) + ' ' + t('per month') + ' · ' + inr(m / 30) + ' ' + t('per day');
   }
   draw();
   const save = h('button', { class: 'btn', onclick: () => busy(save, async () => {
@@ -86,6 +86,7 @@ export async function view({ id }, query) {
   const l = await call('loans.get', { id, asOf });
   const st = l.statement;
   const open = l.status === 'open';
+  const lentTotal = l.principal + l.txns.filter((x) => x.type === 'topup').reduce((a, x) => a + x.amount, 0);
   const custRows = st.rows.map((r) => {
     if (r.kind === 'interest' || r.kind === 'minimum') {
       return h('div', { class: 'mrow' }, h('span', null, r.label + (r.kind === 'interest' && r.principal !== l.principal ? ' (on ' + inr(r.principal) + ')' : '')), h('span', null, r.days), h('span', { class: 'r' }, inr(r.interest)));
@@ -97,7 +98,7 @@ export async function view({ id }, query) {
     title, no: l.id.slice(-6), date: open ? l.date : l.closedAt, shop: l.shop,
     customer: { name: l.customerName, mobile: l.mobile },
     rows: [['Item', l.item + ' (' + (l.metal === 'silver' ? 'silver' : (l.purityPct || '') + '%') + ')'],
-      ['Gross / net weight', g3(l.grossWt) + ' / ' + g3(l.netWt) + ' g'], ['Loan amount', '₹' + Calc.inr(st.principal)],
+      ['Gross / net weight', g3(l.grossWt) + ' / ' + g3(l.netWt) + ' g'], ['Loan amount', '₹' + Calc.inr(open ? st.principal : lentTotal)],
       ['Interest', '₹' + l.ratePct + ' per 100 / month'], ['Loan date', fdate(l.date)],
       ...(open ? [] : [['Interest paid', '₹' + Calc.inr(st.paidInterest)], ['Released on', fdate(l.closedAt)]])],
     total: open ? ['Loan', '₹' + Calc.inr(st.principal)] : ['Collected', '₹' + Calc.inr(st.paidInterest + st.paidPrincipal)],
@@ -105,23 +106,37 @@ export async function view({ id }, query) {
   }, size);
   const actions = docActions(shopDoc(open ? 'GIRVI RECEIPT' : 'GIRVI RELEASED'), {
     filename: 'girvi-' + l.customerName.replace(/\s+/g, '-') + '.pdf', mobile: l.mobile,
-    text: `${l.shop.name}\nGirvi: ${l.item} ${g3(l.netWt)} g\nLoan ₹${Calc.inr(st.principal)} @ ₹${l.ratePct}/100/month from ${fdate(l.date)}` +
+    text: `${l.shop.name}\nGirvi: ${l.item} ${g3(l.netWt)} g\nLoan ₹${Calc.inr(open ? st.principal : lentTotal)} @ ₹${l.ratePct}/100/month from ${fdate(l.date)}` +
       (open ? `\nDue till ${fdate(asOf)}: ₹${Calc.inr(st.totalDue)}` : `\nReleased on ${fdate(l.closedAt)}`)
   });
 
   const onDate = field('Work out till', { type: 'date', value: asOf });
   onDate.input.addEventListener('change', () => go('loan/' + id + '?on=' + onDate.input.value));
+  const stOn = async (d) => (d === asOf ? st : (await call('loans.get', { id, asOf: d })).statement);
   const pay = (type) => async () => {
     const labels = { close: 'Release girvi', interest: 'Interest only', part: 'Part payment', topup: 'Extra loan (top-up)' };
+    // Payments are for today (or the date picked below), never for a future "work out till" date.
+    const day = asOf > S.today ? S.today : asOf;
+    let base;
+    try { base = await stOn(day); } catch (e) { toast(e.message, 'err'); return; }
+    const suggest = type === 'close' ? base.totalDue : type === 'interest' ? Math.round(Math.max(base.interestDue, 0)) : '';
     const v = await ask(labels[type], [
-      { key: 'amount', label: type === 'topup' ? 'Extra amount given (₹)' : 'Amount received (₹)', type: 'num',
-        value: type === 'close' ? String(st.totalDue) : type === 'interest' ? String(Math.round(st.interestDue)) : '' },
+      { key: 'amount', label: type === 'topup' ? 'Extra amount given (₹)' : 'Amount received (₹)', type: 'num', value: String(suggest) },
       { key: 'mode', label: 'Paid by', options: [{ value: 'cash', label: 'Cash' }, { value: 'upi', label: 'UPI' }], value: 'cash' },
-      { key: 'date', label: t('Date'), type: 'date', value: asOf }]);
+      { key: 'date', label: t('Date'), type: 'date', value: day }]);
     if (!v) return;
     let restToBaki = false;
-    if (type === 'close' && num(v.amount) < st.totalDue - 1) {
-      const rest = Math.round(st.totalDue - num(v.amount));
+    let due = base.totalDue;
+    if (v.date && v.date !== day && (type === 'close' || type === 'interest')) {
+      // A different date was picked: work out the amount due on that date.
+      let other;
+      try { other = await stOn(v.date); } catch (e) { toast(e.message, 'err'); return; }
+      const newSuggest = type === 'close' ? other.totalDue : Math.round(Math.max(other.interestDue, 0));
+      if (String(v.amount) === String(suggest)) v.amount = String(newSuggest); // amount was not changed by hand
+      due = other.totalDue;
+    }
+    if (type === 'close' && num(v.amount) < due - 1) {
+      const rest = Math.round(due - num(v.amount));
       if (!await confirmBox(t('Less than full amount'), t('Customer is paying') + ' ' + inr(num(v.amount)) + '. ' +
         t('Give the item back and put the remaining') + ' ' + inr(rest) + ' ' + t('in Baki (dues)?'), t('Yes, put in Baki'))) return;
       restToBaki = true;
@@ -137,10 +152,10 @@ export async function view({ id }, query) {
     query.new ? h('div', { class: 'ok-box' }, 'Girvi saved. Send the receipt below.') : null,
     card(
       h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Loan given'), h('span', null, inr(l.principal))),
-      h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Rate'), h('span', null, '₹' + l.ratePct + ' per 100 / month')),
-      h('div', { class: 'kv' }, h('span', { class: 'muted' }, fdate(l.date) + ' → ' + fdate(l.asOf)), h('span', null, st.totalDays + ' days')),
+      h('div', { class: 'kv' }, h('span', { class: 'muted' }, t('Rate')), h('span', null, '₹' + l.ratePct + ' ' + t('per 100 / month'))),
+      h('div', { class: 'kv' }, h('span', { class: 'muted' }, fdate(l.date) + ' → ' + fdate(l.asOf)), h('span', null, st.totalDays + ' ' + t('days'))),
       h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Paid before'), h('span', null, inr(st.paidInterest + st.paidPrincipal))),
-      l.valueToday ? h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Item value today'), h('span', null, inr(l.valueToday) + ' · loan ' + l.ltvPct + '%')) : null),
+      open && l.valueToday ? h('div', { class: 'kv' }, h('span', { class: 'muted' }, 'Item value today'), h('span', null, inr(l.valueToday) + ' · loan ' + l.ltvPct + '%')) : null),
     open ? onDate : null,
     card(h('div', { class: 'sec' }, 'INTEREST BY MONTH'), h('div', { class: 'mrow head' }, h('span', null, 'Month'), h('span', null, 'Days'), h('span', { class: 'r' }, 'Interest')),
       custRows, h('div', { class: 'mrow strong' }, h('span', null, 'Total interest'), h('span', null, st.totalDays), h('span', { class: 'r' }, inr(st.totalInterest)))),

@@ -52,7 +52,7 @@ export async function render(params, query) {
     const invoiceTotal = Math.round(subtotal + tax);
     const oldValue = olds.reduce((a, o) => a + o.amount(), 0);
     const net = invoiceTotal - oldValue;
-    if (!cashTouched) cash.input.value = net > 0 ? String(Math.max(net - num(udhaar.input.value), 0)) : '';
+    if (!cashTouched) cash.input.value = net > 0 ? String(Math.max(net - num(udhaar.input.value), 0)) : net < 0 ? String(-net) : '';
     const rest = Math.abs(net) - num(cash.input.value) - (net > 0 ? num(udhaar.input.value) : 0);
     upi.input.value = String(Math.round(rest * 100) / 100);
     payNote.textContent = net >= 0 ? t('PAYMENT') + ' · ' + inr(net) + ' ' + t('to collect') : t('OLD GOLD IS MORE · pay') + ' ' + inr(-net) + ' ' + t('to customer');
@@ -78,11 +78,18 @@ export async function render(params, query) {
     if (payload.upi < 0) throw new Error('Cash is more than the amount to collect');
     lines.forEach((l) => l.rememberValues());
     const bill = await call('sale.create', payload);
+    // New item names are offered next time without reloading the app.
+    const saved = payload.lines.filter((l) => l.saveName && l.name).map((l) => l.name);
+    if (saved.length) {
+      const all = list('item_names');
+      saved.forEach((n) => { if (!all.includes(n)) all.unshift(n); });
+      S.settings.item_names = JSON.stringify(all);
+    }
     toast('Bill ' + bill.billNo + ' saved');
     go('bill/' + bill.id);
   }) }, t('Save bill'));
 
-  const fromStock = h('button', { class: 'add', type: 'button', onclick: () => pickFromStock(addLine) }, icon('box', 18), ' From stock');
+  const fromStock = h('button', { class: 'add', type: 'button', onclick: () => pickFromStock(addLine, lines.map((l) => l.get().itemId).filter(Boolean)) }, icon('box', 18), ' From stock');
   return screen(t('New Sale'), S.rate ? '22K ' + inr(S.rate.g22) + '/g · 24K ' + inr(S.rate.g24) + '/g' : 'Set today\'s rate first',
     [typeSeg, !gstReady ? h('div', { class: 'hint' }, 'GST bills need the shop GSTIN — add it in Settings.') : null,
       sec(t('Customer')), picker,
@@ -106,7 +113,7 @@ function lineEditor(pref, onchange, onremove) {
   const saveBtn = h('button', { type: 'button', class: 'save-name', onclick: () => {
     saveName = !saveName; saveBtn.textContent = saveName ? 'Name saved ✓' : 'Save name'; saveBtn.classList.toggle('done', saveName);
   } }, 'Save name');
-  const purity = field(t('Purity %'), { type: 'num', value: pref.purityPct || purityFor(karat), oninput: onchange });
+  const purity = field(t('Purity %'), { max: 100, type: 'num', value: pref.purityPct || purityFor(karat), oninput: onchange });
   const weight = field(t('Weight (g)'), { type: 'num', value: pref.weight || '', oninput: onchange });
   const rate = field(t('Rate ₹/g'), { type: 'num', value: pref.rate || rateFor(karat), oninput: onchange });
   const making = field(t('Making ₹/g'), { type: 'num', value: pref.makingPerG ?? (remember('making') || setting('making_default_per_g', '150')), oninput: onchange });
@@ -125,7 +132,7 @@ function lineEditor(pref, onchange, onremove) {
     grid(3, weight, rate, making),
     pieces,
     total);
-  if (pref.itemId && !isLot) weight.input.readOnly = true;
+  // Weight of a stock piece is filled in; it can be changed (weighed again, or part of a loose lot sold).
   const amount = () => {
     const w = num(weight.input.value);
     try { return Math.round(Calc.evalFormula(setting('formula_sale_line'), { Weight: w, Rate: num(rate.input.value), Making: num(making.input.value) }) * 100) / 100; }
@@ -152,9 +159,9 @@ export function oldEditor(onchange, onremove) {
   let metal = 'gold';
   const item = field('Old item', { value: '' });
   const weight = field(t('Weight (g)'), { type: 'num', oninput: onchange });
-  const cut = field(t('Customer cut %') + ' ' + t('(on bill)'), { type: 'num', value: setting('standard_cut_pct', '20'), oninput: onchange });
+  const cut = field(t('Customer cut %') + ' ' + t('(on bill)'), { max: 100, type: 'num', value: setting('standard_cut_pct', '20'), oninput: onchange });
   const rate = field('24K rate ₹/g', { type: 'num', value: rateFor('24K'), oninput: onchange });
-  const pur = field(t('Our purity estimate %'), { type: 'num', value: setting('standard_purity_pct', '80'), oninput: onchange });
+  const pur = field(t('Our purity estimate %'), { max: 100, type: 'num', value: setting('standard_purity_pct', '80'), oninput: onchange });
   const mseg = seg([{ value: 'gold', label: 'Gold' }, { value: 'silver', label: 'Silver' }], metal, (v) => {
     metal = v; rate.input.value = v === 'silver' ? rateFor('Silver') : rateFor('24K');
     rate.querySelector('.lbl').textContent = v === 'silver' ? 'Silver rate ₹/g' : '24K rate ₹/g'; onchange();
@@ -190,14 +197,14 @@ export function oldEditor(onchange, onremove) {
   };
 }
 
-async function pickFromStock(addLine) {
+async function pickFromStock(addLine, taken = []) {
   const q = field('Tag or name', {});
   const results = h('div', { class: 'list' });
   let chosen = null;
   const runSearch = async () => {
     try {
       const items = await call('stock.list', { q: q.input.value.trim() });
-      results.replaceChildren(...items.slice(0, 20).map((i) => h('button', { type: 'button', class: 'pick-item', onclick: () => {
+      results.replaceChildren(...items.filter((i) => !taken.includes(i.id)).slice(0, 20).map((i) => h('button', { type: 'button', class: 'pick-item', onclick: () => {
         chosen = i; document.querySelector('.modal-actions .btn').click();
       } }, h('b', null, (i.tag ? i.tag + ' · ' : '') + i.name), h('span', null, g3(i.netWt) + ' g · ' + (i.purityPct || '') + '%'))));
     } catch (e) { results.replaceChildren(h('div', { class: 'error-box' }, e.message)); }
@@ -212,5 +219,5 @@ async function pickFromStock(addLine) {
   const lot = chosen.pieces > 1;
   addLine({ itemId: chosen.id, tag: chosen.tag, name: chosen.name, weight: lot ? '' : chosen.netWt, purityPct: chosen.purityPct,
     lotPieces: chosen.pieces, lotWt: chosen.netWt,
-    karat, makingPerG: chosen.makingPerG || undefined });
+    karat, makingPerG: chosen.makingPerG || (chosen.metal === 'silver' ? 0 : undefined) });
 }

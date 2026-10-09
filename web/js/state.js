@@ -14,10 +14,11 @@ export async function refresh() {
 }
 
 /** Fills S from the last saved copy (if any). Returns true when it did. */
-export function loadCached() {
+export function loadCached(today) {
   try {
     const b = JSON.parse(localStorage.getItem(CACHE) || 'null');
-    if (b && b.user && b.settings) { Object.assign(S, b); return true; }
+    // Only today's copy is used: an old date or rate must never go into a bill or girvi.
+    if (b && b.user && b.settings && (!today || b.today === today)) { Object.assign(S, b); return true; }
   } catch (e) { /* ignore */ }
   return false;
 }

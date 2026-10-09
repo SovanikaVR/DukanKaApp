@@ -46,7 +46,7 @@ export async function profile({ id }) {
 
   const loans = d.loans.filter((l) => l.status === 'open').map((l) => h('a', { class: 'row-card', href: '#/loan/' + l.id },
     h('div', { class: 'kv' }, h('b', null, l.item + ' · ' + g3(l.netWt) + ' g'), h('span', { class: 'link' }, 'Release ›')),
-    h('div', { class: 'muted' }, inr(l.principal) + ' @ ₹' + l.ratePct + ' · since ' + fdate(l.date) + ' (' + l.days + ' days) · due ' + inr(l.totalDue))));
+    h('div', { class: 'muted' }, inr(l.principal) + ' @ ₹' + l.ratePct + ' · ' + t('since') + ' ' + fdate(l.date) + ' (' + l.days + ' ' + t('days') + ') · ' + t('Due') + ' ' + inr(l.totalDue))));
   const orders = d.orders.filter((o) => o.status !== 'delivered' && o.status !== 'cancelled').map((o) => h('a', { class: 'row-card', href: '#/order/' + o.id },
     h('div', { class: 'kv' }, h('b', null, o.item + ' · ~' + g3(o.estWt) + ' g'), h('span', { class: 'tag ' + (o.rateFixed ? '' : 'gold') }, o.rateFixed ? 'Rate fixed' : 'Rate not fixed')),
     h('div', { class: 'muted' }, inr(o.paid) + ' deposited' + (o.deliveryDate ? ' · delivery ' + fdate(o.deliveryDate) : ''))));
@@ -55,7 +55,12 @@ export async function profile({ id }) {
   const history = [
     ...d.sales.map((s) => ({ date: s.date, el: h('a', { href: '#/bill/' + s.id }, fdate(s.date) + ' · ' + (s.type === 'GST' ? 'GST bill ' : 'Estimate ') + s.billNo + ' · ' + inr(s.net) + (s.status === 'void' ? ' (cancelled)' : '')) })),
     ...d.oldGold.map((g) => ({ date: g.date, el: h('span', null, fdate(g.date) + ' · Old ' + g.metal + ' ' + (g.source === 'sale' ? 'in exchange' : 'sold to shop') + ' · ' + g.item + ' ' + g3(g.weight) + ' g, cut ' + g.cutPct + '%, fine ' + g3(g.customerFine) + ' g · ' + (g.status === 'melted' ? 'melted' : 'in old gold stock')) })),
-    ...d.loans.filter((l) => l.status === 'closed').map((l) => ({ date: l.closedAt, el: h('span', null, fdate(l.closedAt) + ' · Girvi released · ' + l.item) }))
+    ...d.loans.filter((l) => l.status === 'closed').map((l) => ({ date: l.closedAt, el: h('span', null, fdate(l.closedAt) + ' · Girvi released · ' + l.item) })),
+    ...d.orders.filter((o) => o.status === 'delivered' || o.status === 'cancelled').map((o) => ({ date: o.deliveredAt || o.date,
+      el: h('a', { href: '#/order/' + o.id }, fdate(o.deliveredAt || o.date) + ' · ' + t('Order') + ' ' + t(o.status === 'delivered' ? 'Delivered' : 'Cancelled') + ' · ' + o.item) })),
+    ...d.repairs.filter((r) => r.status === 'delivered').map((r) => ({ date: r.deliveredAt,
+      el: h('a', { href: '#/repair/' + r.id }, fdate(r.deliveredAt) + ' · ' + t('Repair') + ' · ' + r.item + ' · ' + inr(r.custCharge)) })),
+    ...(d.dues || []).map((x) => ({ date: x.date, el: h('a', { href: '#/dues' }, fdate(x.date) + ' · ' + t('Baki') + ' ' + (x.amount < 0 ? '− ' : '+ ') + inr(Math.abs(x.amount))) }))
   ].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 25).map((x) => h('div', { class: 'hist' }, x.el));
 
   return screen(d.name, [c.village, c.mobile].filter(Boolean).join(' · '), [

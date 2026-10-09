@@ -10,7 +10,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.1.0';
+var APP_VERSION = '1.2.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -27,7 +27,7 @@ var SCHEMA = {
     'cutPct', 'customerFine', 'rate', 'amount', 'ourPurityPct', 'ourFine', 'status', 'meltId', 'by', 'at'],
   Loans: ['id', 'date', 'customerId', 'customerName', 'mobile', 'item', 'metal', 'purityPct',
     'grossWt', 'netWt', 'principal', 'ratePct', 'formula', 'minDays', 'status', 'closedAt',
-    'notes', 'by', 'at'],
+    'notes', 'by', 'at', 'mode'],
   LoanTxns: ['id', 'loanId', 'date', 'type', 'amount', 'interestPart', 'principalPart', 'mode', 'by', 'at', 'status'],
   Orders: ['id', 'date', 'customerId', 'customerName', 'mobile', 'item', 'metal', 'purityPct',
     'estWt', 'makingPerG', 'karigarPerG', 'method', 'rate', 'fixedTotal', 'deliveryDate', 'status',
@@ -83,7 +83,7 @@ var DEFAULT_SETTINGS = {
 /** Actions only the owner may call. */
 var OWNER_ONLY = {
   'settings.save': 1, 'users.list': 1, 'users.save': 1, 'sale.void': 1, 'cash.opening': 1,
-  'reports.profit': 1, 'admin.archive': 1, 'admin.backupNow': 1, 'loans.edit': 1, 'loans.void': 1,
+  'admin.archive': 1, 'admin.backupNow': 1, 'loans.edit': 1, 'loans.void': 1,
   'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'stock.update': 1, 'dues.adjust': 1
 };
 
@@ -147,7 +147,9 @@ function rows_(name) {
       for (var j = 0; j < headers.length; j++) {
         var v = vals[i][j];
         if (v instanceof Date) v = Utilities.formatDate(v, tz_(), 'yyyy-MM-dd');
-        o[headers[j]] = v === null || v === undefined ? '' : String(v);
+        v = v === null || v === undefined ? '' : String(v);
+        if (v.charAt(0) === "'" && v.charAt(1) === '=') v = v.slice(1);
+        o[headers[j]] = v;
       }
       out.push(o);
     }
@@ -162,7 +164,9 @@ function toCell_(v) {
   if (v === null || v === undefined) return '';
   if (typeof v === 'object') return JSON.stringify(v);
   if (typeof v === 'boolean') return v ? 'true' : 'false';
-  return String(v);
+  v = String(v);
+  // Text typed by a user that starts with "=" must never become a Google Sheets formula.
+  return v.charAt(0) === '=' ? "'" + v : v;
 }
 
 /** Appends one record. Missing fields become blank. Returns the record. */
@@ -239,8 +243,27 @@ function fyOf_(dateStr) {
   return String(start % 100).padStart(2, '0') + '-' + String((start + 1) % 100).padStart(2, '0');
 }
 
+/** Date used only to look things up (future allowed): a bad value means today. */
+function readDate_(s) {
+  try { return s && String(s) > today_() && /^\d{4}-\d{2}-\d{2}$/.test(String(s)) ? (validDateAny_(String(s)) ? String(s) : today_()) : validDate_(s); }
+  catch (e) { return today_(); }
+}
+function validDateAny_(s) {
+  var p = s.split('-').map(Number);
+  var dt = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+  return dt.getUTCFullYear() === p[0] && dt.getUTCMonth() === p[1] - 1 && dt.getUTCDate() === p[2];
+}
+
+/** Entry date from the app: blank = today. A wrong or future date is refused. */
 function validDate_(s) {
-  return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : today_();
+  if (s === undefined || s === null || s === '') return today_();
+  s = String(s);
+  req_(/^\d{4}-\d{2}-\d{2}$/.test(s), 'Date is not valid');
+  var p = s.split('-').map(Number);
+  var dt = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+  req_(dt.getUTCFullYear() === p[0] && dt.getUTCMonth() === p[1] - 1 && dt.getUTCDate() === p[2], 'Date is not valid: ' + s);
+  req_(s <= today_(), 'Date cannot be in the future');
+  return s;
 }
 
 function req_(cond, msg) { if (!cond) throw new Error(msg); }
@@ -467,7 +490,7 @@ var ROUTES = {
   'customers.save': function (u, d) { return customerSave_(u, d); },
   'sale.create': function (u, d) { return saleCreate_(u, d); },
   'sale.list': function (u, d) { return saleList_(d); },
-  'sale.get': function (u, d) { return saleGet_(d.id, d.fy); },
+  'sale.get': function (u, d) { return hideCost_(u, saleGet_(d.id, d.fy)); },
   'sale.void': function (u, d) { return saleVoid_(u, d); },
   'sale.payUdhaar': function (u, d) { return salePayUdhaar_(u, d); },
   'oldgold.buy': function (u, d) { return oldGoldBuy_(u, d); },
@@ -487,11 +510,11 @@ var ROUTES = {
   'repairs.return': function (u, d) { return repairReturn_(u, d); },
   'repairs.deliver': function (u, d) { return repairDeliver_(u, d); },
   'stock.add': function (u, d) { return stockAdd_(u, d); },
-  'stock.list': function (u, d) { return stockList_(d); },
+  'stock.list': function (u, d) { return stockList_(d).map(function (i) { if (u.role !== 'owner') i.costTotal = null; return i; }); },
   'stock.summary': function () { return stockSummary_(); },
   'stock.update': function (u, d) { return stockUpdate_(u, d); },
   'melt.create': function (u, d) { return meltCreate_(u, d); },
-  'melt.list': function () { return meltList_(); },
+  'melt.list': function (u) { var m = meltList_(); if (u.role !== 'owner') m.forEach(function (x) { delete x.gain; delete x.gainValue; delete x.cost; delete x.paidAmount; }); return m; },
   'fine.summary': function () { return fineSummary_(); },
   'parties.list': function (u, d) { return partiesList_(d); },
   'parties.save': function (u, d) { return partySave_(u, d); },
@@ -500,8 +523,8 @@ var ROUTES = {
   'cash.list': function (u, d) { return cashList_(d); },
   'cash.add': function (u, d) { return cashAdd_(u, d); },
   'cash.opening': function (u, d) { return cashOpening_(u, d); },
-  'reports.daily': function (u, d) { return reportDaily_(d.date); },
-  'reports.month': function (u, d) { return reportMonth_(d.month); },
+  'reports.daily': function (u, d) { return hideProfit_(u, reportDaily_(d.date)); },
+  'reports.month': function (u, d) { return hideProfit_(u, reportMonth_(d.month)); },
   'reports.position': function () { return reportPosition_(); },
   'dues.list': function (u, d) { return duesList_(d); },
   'dues.pay': function (u, d) { return duesPay_(u, d); },
@@ -550,7 +573,8 @@ function handle_(action, token, data) {
     if (cache) {
       try {
         var str = JSON.stringify(result === undefined ? {} : result);
-        if (str.length < 90000) cache.put(rid, str, 21600);
+        // CacheService holds 100 KB (bytes; Hindi text is 3 bytes a letter). A big reply is remembered only as "saved".
+        cache.put(rid, str.length * 3 < 95000 ? str : '{"_saved":true}', 21600);
       } catch (e) { /* cache full or too large: skip */ }
     }
     return result;
@@ -573,12 +597,21 @@ function bootstrap_(user) {
   };
 }
 
+function hideCost_(user, bill) {
+  if (user && user.role === 'owner') return bill;
+  (bill.lines || []).forEach(function (l) { delete l.cost; if (l.part) delete l.part.cost; });
+  return bill;
+}
+
 /* ===== 10_core.js ===== */
 /* ---------- Settings, daily rate, customers ---------- */
 
 function settingsSave_(user, d) {
   var allowed = Object.keys(DEFAULT_SETTINGS);
   var changed = {};
+  var NUM = { gst_default_pct: [0, 28], making_default_per_g: [0, 1e6], standard_cut_pct: [0, 100], standard_purity_pct: [0, 100],
+    interest_default_rate: [0, 100], interest_min_days: [0, 365], purity_24k: [1, 100], purity_22k: [1, 100], purity_18k: [1, 100] };
+  // Check every value first, then save: a mistake in one box must not half-save the rest.
   Object.keys(d || {}).forEach(function (k) {
     if (allowed.indexOf(k) < 0) return;
     var v = d[k];
@@ -587,11 +620,16 @@ function settingsSave_(user, d) {
     if (k.indexOf('formula_') === 0) testFormula_(k, v);
     if (k === 'shop_gstin' && v) {
       v = v.trim().toUpperCase();
-      req_(/^[0-9]{2}[A-Z0-9]{13}$/.test(v), 'GSTIN should be 15 characters, starting with the 2-digit state code');
+      req_(/^[0-3][0-9][A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(v), 'GSTIN is not valid (15 characters, like 27ABCDE1234F1Z5)');
     }
-    setSetting_(k, v);
+    if (NUM[k]) {
+      var n = parseFloat(String(v).replace(/,/g, ''));
+      req_(!isNaN(n) && n >= NUM[k][0] && n <= NUM[k][1], 'Check the value of ' + k.replace(/_/g, ' ') + ' (' + NUM[k][0] + ' to ' + NUM[k][1] + ')');
+      v = String(n);
+    }
     changed[k] = v;
   });
+  Object.keys(changed).forEach(function (k) { setSetting_(k, changed[k]); });
   audit_(user, 'settings.save', '', changed);
   return settings_();
 }
@@ -682,8 +720,12 @@ function customerSave_(user, d) {
     return saved;
   }
   if (mobile) {
-    var dup = rows_('Customers').filter(function (c) { return c.mobile === mobile; })[0];
-    if (dup && dup.firstName.toLowerCase() === first.toLowerCase()) return dup;
+    // Same person typed again (same mobile, first name and surname/blank): reuse instead of making a copy.
+    var dup = rows_('Customers').filter(function (c) {
+      return c.mobile === mobile && c.firstName.toLowerCase() === first.toLowerCase() &&
+        (!rec.lastName || !c.lastName || c.lastName.toLowerCase() === rec.lastName.toLowerCase());
+    })[0];
+    if (dup) return dup;
   }
   rec.id = uid_('K');
   rec.createdAt = nowIso_();
@@ -705,9 +747,11 @@ function ensureCustomer_(user, d) {
 }
 
 function customersSearch_(d) {
-  var q = String(d.q || '').trim().toLowerCase();
+  var q = String(d.q || '').trim().toLowerCase().replace(/\s+/g, ' ');
   var village = String(d.village || '').trim().toLowerCase();
   var digits = q.replace(/\D/g, '');
+  if (digits.length > 10 && /^(91|0)/.test(digits)) digits = digits.slice(-10);
+  var words = q.split(' ');
   var list = rows_('Customers');
   var scored = [];
   list.forEach(function (c) {
@@ -717,7 +761,8 @@ function customersSearch_(d) {
     if (!q) { score = 1; }
     else if (fn.indexOf(q) === 0) { score = 5; matched = 'name'; }
     else if (ln.indexOf(q) === 0) { score = 4; matched = 'surname'; }
-    else if ((fn + ' ' + ln).indexOf(q) >= 0) { score = 3; matched = 'name'; }
+    else if ((fn + ' ' + ln).indexOf(q) >= 0 || (ln + ' ' + fn).indexOf(q) >= 0) { score = 3; matched = 'name'; }
+    else if (words.length > 1 && words.every(function (w) { return (fn + ' ' + ln + ' ' + c.village.toLowerCase()).indexOf(w) >= 0; })) { score = 3; matched = 'name'; }
     else if (digits.length >= 3 && c.mobile.indexOf(digits) >= 0) { score = 2; matched = 'mobile'; }
     else if (c.village.toLowerCase().indexOf(q) === 0) { score = 1; matched = 'village'; }
     if (score) scored.push({ c: c, s: score, m: matched });
@@ -777,7 +822,9 @@ function customerGet_(id) {
   return {
     customer: c, name: customerName_(c), loans: loans, orders: orders, repairs: repairs, sales: sales,
     oldGold: oldGold, girviDue: Math.round(girviDue), orderAdvance: Math.round(advance),
-    udhaar: customerUdhaar_(id)
+    udhaar: customerUdhaar_(id),
+    dues: rows_('Dues').filter(function (x) { return x.customerId === id; }).slice(-20)
+      .map(function (x) { return { date: x.date, amount: num_(x.amount), refType: x.refType }; })
   };
 }
 
@@ -785,10 +832,13 @@ function customerGet_(id) {
 /* ---------- Sales (GST bill / estimate) and old gold ---------- */
 
 function oldGoldCalc_(g) {
-  var weight = num_(g.weight);
-  var cut = num_(g.cutPct);
-  var rate = num_(g.rate);
-  var purity = g.ourPurityPct === '' || g.ourPurityPct === undefined ? num_(settings_().standard_purity_pct) : num_(g.ourPurityPct);
+  var weight = pos_(g.weight, 'Old gold weight');
+  var cut = pos_(g.cutPct, 'Cut %');
+  var rate = pos_(g.rate, 'Rate');
+  var purity = g.ourPurityPct === '' || g.ourPurityPct === undefined ? num_(settings_().standard_purity_pct) : pos_(g.ourPurityPct, 'Purity');
+  req_(cut <= 100, 'Cut % should be between 0 and 100');
+  req_(purity <= 100, 'Purity % should be between 0 and 100');
+  pos_(g.amount, 'Old gold amount');
   var customerFine = round3_(Calc.evalFormula(formula_('formula_old_fine'), { Weight: weight, Cut: cut }));
   var ourFine = round3_(Calc.evalFormula(formula_('formula_our_fine'), { Weight: weight, Purity: purity }));
   var amount = g.amount !== undefined && g.amount !== '' ? Math.round(num_(g.amount)) : Math.round(customerFine * rate);
@@ -817,9 +867,20 @@ function saleCreate_(user, d) {
     req_(s.shop_gstin, 'Add the shop GSTIN in Settings before making a GST bill');
   }
   var date = validDate_(d.date);
+  req_(!s['archive_' + fyOf_(date)], 'Year ' + fyOf_(date) + ' is closed (archived). Use a date in the current year.');
+  // Only fully empty lines are skipped; a line with a name or a stock item but no weight is a mistake.
+  var lines = (d.lines || []).filter(function (l) {
+    return l.itemId || num_(l.weight) || num_(l.amount) || String(l.name || '').trim() && String(l.name).trim() !== 'Item';
+  });
+  req_(lines.length, 'Add at least one item. (To only buy old gold, use "Buy old gold".)');
+  var seen = {};
+  lines.forEach(function (l) {
+    req_(num_(l.weight) > 0 || (!l.itemId && num_(l.amount) > 0), 'Enter the weight for ' + (String(l.name || '').trim() || 'each item'));
+    if (l.itemId) { req_(!seen[l.itemId], 'The same stock item is twice in this bill'); seen[l.itemId] = 1; }
+  });
+  var gstIn = d.gstPct !== undefined && d.gstPct !== '' ? num_(d.gstPct) : null;
+  req_(gstIn === null || (gstIn >= 0 && gstIn <= 28), 'GST % should be between 0 and 28');
   var c = ensureCustomer_(user, d);
-  var lines = (d.lines || []).filter(function (l) { return num_(l.weight) > 0 || num_(l.amount) > 0; });
-  req_(lines.length, 'Add at least one item');
   var saleFormula = formula_('formula_sale_line');
   var subtotal = 0, costTotal = 0, namesToSave = [];
   var cleanLines = lines.map(function (l) {
@@ -833,15 +894,26 @@ function saleCreate_(user, d) {
     var amount = l.amount !== undefined && l.amount !== '' && !w ? num_(l.amount)
       : round2_(Calc.evalFormula(saleFormula, { Weight: w, Rate: rate, Making: mk }));
     subtotal += amount;
-    // A lot (many pieces / loose weight) can be sold in part: only what was sold leaves stock.
+    // A lot (many pieces, or loose weight) is sold from: only the weight / pieces sold leave stock,
+    // and that part is remembered on the bill so cancelling puts back exactly that.
     var part = null;
     if (item) {
       var lotWt = num_(item.netWt), lotPcs = num_(item.pieces) || 1;
-      var soldWt = w > 0 ? Math.min(w, lotWt) : lotWt;
-      var soldPcs = lotPcs > 1 ? Math.max(1, Math.round(num_(l.pieces) || 1)) : 1;
-      req_(soldPcs <= lotPcs, 'Only ' + lotPcs + ' pieces left in ' + (item.tag || item.name));
-      if (soldWt < lotWt - 0.0005 || soldPcs < lotPcs) part = { wt: round3_(soldWt), pcs: soldPcs,
-        cost: round2_(num_(item.costTotal) * soldWt / (lotWt || 1)) };
+      var name = item.tag || item.name;
+      // A single piece weighed again at the counter can differ a little: that is still the whole piece.
+      var tol = lotPcs === 1 ? Math.max(0.1, lotWt * 0.02) : 0.0005;
+      req_(w <= lotWt + tol, 'Only ' + round3_(lotWt) + ' g left in ' + name);
+      var isLot = lotPcs > 1 || w < lotWt - tol;
+      if (isLot) {
+        var soldPcs = lotPcs > 1 ? Math.max(1, Math.round(num_(l.pieces) || 1)) : 0;
+        req_(soldPcs <= lotPcs, 'Only ' + lotPcs + ' pieces left in ' + name);
+        if (lotPcs > 1) {
+          var allPcs = soldPcs === lotPcs, allWt = w >= lotWt - 0.0005;
+          req_(allPcs === allWt, allPcs ? 'Selling all ' + lotPcs + ' pieces of ' + name + ': the weight should be ' + round3_(lotWt) + ' g'
+            : 'The whole weight of ' + name + ' is ' + round3_(lotWt) + ' g — enter the weight of the ' + soldPcs + ' piece(s) sold');
+        }
+        part = { wt: round3_(Math.min(w, lotWt)), pcs: soldPcs, cost: round2_(num_(item.costTotal) * Math.min(w, lotWt) / (lotWt || 1)) };
+      }
     }
     var cost = item ? (part ? part.cost : num_(item.costTotal)) : 0;
     costTotal += cost;
@@ -854,7 +926,7 @@ function saleCreate_(user, d) {
     };
   });
   subtotal = round2_(subtotal);
-  var gstPct = type === 'GST' ? (d.gstPct !== undefined && d.gstPct !== '' ? num_(d.gstPct) : num_(s.gst_default_pct)) : 0;
+  var gstPct = type === 'GST' ? (gstIn !== null ? gstIn : num_(s.gst_default_pct)) : 0;
   var tax = round2_(subtotal * gstPct / 100);
   var invoiceTotal = Math.round(subtotal + tax);
   var roundOff = round2_(invoiceTotal - subtotal - tax);
@@ -888,11 +960,11 @@ function saleCreate_(user, d) {
     if (l.part) {
       var it = find_('Items', l.itemId);
       var left = round3_(num_(it.netWt) - l.part.wt);
-      var pcsLeft = (num_(it.pieces) || 1) - l.part.pcs;
+      var pcsLeft = num_(it.pieces) - l.part.pcs;
       update_('Items', l.itemId, {
         netWt: Math.max(left, 0), grossWt: round3_(Math.max(0, num_(it.grossWt) - l.part.wt)), pieces: Math.max(pcsLeft, 0),
-        costTotal: round2_(num_(it.costTotal) - l.part.cost),
-        status: left <= 0.0005 || pcsLeft <= 0 ? 'sold' : 'in', soldBillId: id
+        costTotal: round2_(Math.max(0, num_(it.costTotal) - l.part.cost)),
+        status: left <= 0.0005 ? 'sold' : 'in', soldBillId: id
       });
     } else update_('Items', l.itemId, { status: 'sold', soldBillId: id });
   });
@@ -962,6 +1034,7 @@ function saleList_(d) {
   var q = String(d.q || '').toLowerCase();
   var source = (d.fy && archivedSales_(d.fy)) || rows_('Sales');
   var list = source.filter(function (b) {
+    if (d.fy && b.fy !== d.fy) return false;
     if (b.date < from || b.date > to) return false;
     if (d.type && b.type !== d.type) return false;
     if (q && (b.customerName + ' ' + b.billNo + ' ' + b.mobile).toLowerCase().indexOf(q) < 0) return false;
@@ -979,6 +1052,15 @@ function saleVoid_(user, d) {
   var b = find_('Sales', d.id);
   req_(b, 'Bill not found');
   req_(b.status !== 'void', 'Bill is already cancelled');
+  // Check everything first: Apps Script cannot roll back half-done changes.
+  var olds = rows_('OldGold').filter(function (g) { return g.billId === b.id && g.status !== 'void'; });
+  olds.forEach(function (g) { req_(g.status !== 'melted', 'Old gold from this bill is already melted; cannot cancel'); });
+  var cust = find_('Customers', b.customerId);
+  var udhaar = num_(b.udhaar);
+  // If the customer already paid back part of this bill's baki, that money is returned to them now.
+  var stillDue = udhaar > 0 && cust ? Math.min(udhaar, Math.max(customerUdhaar_(cust.id), 0)) : 0;
+  var paidBack = round2_(udhaar - stillDue);
+
   update_('Sales', b.id, { status: 'void' });
   json_(b.lines, []).forEach(function (l) {
     if (!l.itemId) return;
@@ -986,24 +1068,19 @@ function saleVoid_(user, d) {
     if (!it) return;
     if (l.part) {
       update_('Items', l.itemId, { status: 'in', netWt: round3_(num_(it.netWt) + l.part.wt),
-        grossWt: round3_(num_(it.grossWt) + l.part.wt), pieces: num_(it.pieces) + l.part.pcs,
-        costTotal: round2_(num_(it.costTotal) + l.part.cost) });
+        grossWt: round3_(num_(it.grossWt) + l.part.wt), pieces: num_(it.pieces) + num_(l.part.pcs),
+        costTotal: round2_(num_(it.costTotal) + num_(l.part.cost)) });
     } else update_('Items', l.itemId, { status: 'in', soldBillId: '' });
   });
-  if (num_(b.udhaar) > 0) {
-    var cust = find_('Customers', b.customerId);
-    if (cust) duesAdd_(user, cust, -num_(b.udhaar), 'sale-cancel', b.id, 'Cancelled ' + b.billNo);
-  }
-  rows_('OldGold').filter(function (g) { return g.billId === b.id; }).forEach(function (g) {
-    req_(g.status !== 'melted', 'Old gold from this bill is already melted; cannot cancel');
-    update_('OldGold', g.id, { status: 'void' });
-  });
+  if (stillDue > 0) duesAdd_(user, cust, -stillDue, 'sale-cancel', b.id, 'Cancelled ' + b.billNo);
+  olds.forEach(function (g) { update_('OldGold', g.id, { status: 'void' }); });
   var net = num_(b.net);
   var dir = net >= 0 ? 'out' : 'in';
   cash_(user, dir, 'cash', num_(b.cash), 'sale-cancel', 'sale', b.id, 'Cancelled ' + b.billNo);
   cash_(user, dir, 'upi', num_(b.upi), 'sale-cancel', 'sale', b.id, 'Cancelled ' + b.billNo);
-  audit_(user, 'sale.void', b.id, { billNo: b.billNo, reason: d.reason || '' });
-  return { ok: true };
+  if (paidBack >= 1) cash_(user, 'out', 'cash', paidBack, 'sale-cancel', 'sale', b.id, 'Cancelled ' + b.billNo + ': baki already paid, returned');
+  audit_(user, 'sale.void', b.id, { billNo: b.billNo, reason: d.reason || '', returned: paidBack });
+  return { ok: true, returned: paidBack };
 }
 
 function salePayUdhaar_(user, d) { return duesPay_(user, d); }
@@ -1062,7 +1139,7 @@ function loanOpts_() {
 function loanTxns_(loanId) {
   return rows_('LoanTxns').filter(function (t) { return t.loanId === loanId; }).map(function (t) {
     return { id: t.id, date: t.date, type: t.type, amount: num_(t.amount), interestPart: num_(t.interestPart),
-      principalPart: num_(t.principalPart), mode: t.mode, by: t.by };
+      principalPart: num_(t.principalPart), mode: t.mode, by: t.by, at: t.at };
   });
 }
 
@@ -1080,10 +1157,10 @@ function loanCreate_(user, d) {
     purityPct: num_(d.purityPct), grossWt: round3_(d.grossWt), netWt: round3_(d.netWt || d.grossWt),
     principal: principal, ratePct: rate, formula: formula_('formula_interest'),
     minDays: num_(settings_().interest_min_days), status: 'open', closedAt: '',
-    notes: String(d.notes || ''), by: user.username, at: nowIso_()
+    notes: String(d.notes || ''), by: user.username, at: nowIso_(), mode: d.mode === 'upi' ? 'upi' : 'cash'
   };
   insert_('Loans', rec);
-  cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', principal, 'girvi-given', 'loan', rec.id, rec.customerName, date);
+  cash_(user, 'out', rec.mode, principal, 'girvi-given', 'loan', rec.id, rec.customerName, date);
   audit_(user, 'loan.create', rec.id, { principal: principal, rate: rate });
   return loanGet_(rec.id);
 }
@@ -1098,7 +1175,7 @@ function loanGet_(id, asOf) {
   var l = find_('Loans', id);
   req_(l, 'Loan not found');
   var txns = loanTxns_(id);
-  var on = l.status === 'open' ? validDate_(asOf) : (l.closedAt || today_());
+  var on = l.status === 'open' ? readDate_(asOf) : (l.closedAt || today_());
   var st = Calc.loanStatement(l, txns, on, loanOpts_());
   var rate = todayRate_();
   var value = itemValue_(l.metal, num_(l.netWt), num_(l.purityPct), rate);
@@ -1120,18 +1197,19 @@ function loansList_(d) {
   var t = today_();
   var opts = loanOpts_();
   var rate = todayRate_();
-  var allTx = rows_('LoanTxns');
+  var byLoan = {};
+  rows_('LoanTxns').forEach(function (x) { (byLoan[x.loanId] = byLoan[x.loanId] || []).push(x); });
   var list = rows_('Loans').filter(function (l) {
     if (status !== 'all' && l.status !== status) return false;
     if (q && (l.customerName + ' ' + l.mobile + ' ' + l.item).toLowerCase().indexOf(q) < 0) return false;
     return true;
   }).map(function (l) {
-    var txns = allTx.filter(function (x) { return x.loanId === l.id; });
+    var txns = byLoan[l.id] || [];
     var st = Calc.loanStatement(l, txns, l.status === 'open' ? t : (l.closedAt || t), opts);
     var value = itemValue_(l.metal, num_(l.netWt), num_(l.purityPct), rate);
     return {
       id: l.id, date: l.date, customerId: l.customerId, customerName: l.customerName, mobile: l.mobile,
-      item: l.item, metal: l.metal, netWt: num_(l.netWt), principal: st.principal, ratePct: num_(l.ratePct),
+      item: l.item, metal: l.metal, netWt: num_(l.netWt), principal: l.status === 'open' ? st.principal : num_(l.principal) + txns.filter(function (x) { return x.type === 'topup'; }).reduce(function (a, x) { return a + num_(x.amount); }, 0), ratePct: num_(l.ratePct),
       days: st.totalDays, interestDue: st.interestDue, totalDue: st.totalDue, valueToday: value,
       ltvPct: value ? Math.round(st.principal / value * 100) : null, status: l.status, closedAt: l.closedAt
     };
@@ -1149,14 +1227,20 @@ function loanPay_(user, d) {
   var date = validDate_(d.date);
   req_(date >= l.date, 'Date is before the loan date');
   var txns = loanTxns_(l.id);
+  var lastTx = txns.reduce(function (m, t) { return t.date > m ? t.date : m; }, '');
+  req_(!lastTx || date >= lastTx, 'A later payment (' + lastTx + ') is already saved. Use that date or later.');
   var before = Calc.loanStatement(l, txns, date, loanOpts_());
   var amt = round2_(pos_(d.amount, 'Amount'));
   if (type === 'close' && !amt && !d.restToBaki) amt = before.totalDue;
   req_(amt > 0 || (type === 'close' && d.restToBaki), 'Enter the amount');
   var interestPart = 0, principalPart = 0;
-  if (type === 'interest') interestPart = amt;
-  else if (type === 'part' || type === 'close') {
-    interestPart = Math.min(amt, Math.max(before.interestDue, 0));
+  // Part payments clear only the interest earned so far; the minimum-days interest is charged only at release.
+  var basis = type === 'part' ? Calc.loanStatement(l, txns, date, { formula: loanOpts_().formula, noMinimum: true }) : before;
+  if (type === 'interest') {
+    req_(amt <= Math.max(before.interestDue, 0) + 1, 'Interest due is only ₹' + Math.round(Math.max(before.interestDue, 0)) + '. Use "Part pay" to pay more.');
+    interestPart = amt;
+  } else if (type === 'part' || type === 'close') {
+    interestPart = Math.min(amt, Math.max(basis.interestDue, 0));
     principalPart = amt - interestPart;
   }
   var rest = 0;
@@ -1172,7 +1256,8 @@ function loanPay_(user, d) {
     interestPart: round2_(interestPart), principalPart: round2_(principalPart),
     mode: d.mode === 'upi' ? 'upi' : 'cash', by: user.username, at: nowIso_()
   };
-  if (amt > 0) insert_('LoanTxns', tx);
+  // A release is always written (even with ₹0 paid) so it can be undone.
+  if (amt > 0 || type === 'close') insert_('LoanTxns', tx);
   if (rest >= 1) duesAdd_(user, find_('Customers', l.customerId), rest, 'loan', l.id, 'Girvi released, balance', date);
   if (type === 'topup') {
     cash_(user, 'out', tx.mode, amt, 'girvi-given', 'loan', l.id, l.customerName + ' (top-up)', date);
@@ -1187,8 +1272,14 @@ function loanPay_(user, d) {
 /* ===== 13_orders_repairs.js ===== */
 /* ---------- Orders (advance booking) ---------- */
 
+var _payIndex = null;
 function orderPayments_(orderId) {
-  return rows_('OrderPayments').filter(function (p) { return p.orderId === orderId; }).map(function (p) {
+  // Built once per request (cleared when a payment is added): lists of many orders stay fast.
+  if (!_payIndex || _payIndex.rows !== rows_('OrderPayments')) {
+    _payIndex = { rows: rows_('OrderPayments'), by: {} };
+    _payIndex.rows.forEach(function (p) { (_payIndex.by[p.orderId] = _payIndex.by[p.orderId] || []).push(p); });
+  }
+  return (_payIndex.by[orderId] || []).map(function (p) {
     return { id: p.id, date: p.date, amount: num_(p.amount), mode: p.mode, by: p.by };
   });
 }
@@ -1199,7 +1290,8 @@ function orderTotalFor_(weight, rate, making) {
 
 function orderSummary_(o) {
   var pays = orderPayments_(o.id);
-  var paid = pays.reduce(function (a, p) { return a + p.amount; }, 0);
+  var paid = pays.reduce(function (a, p) { return a + p.amount; }, 0); // refunds are stored as minus payments
+  var refunded = -pays.reduce(function (a, p) { return a + (p.amount < 0 ? p.amount : 0); }, 0);
   var rateFixed = num_(o.rate) > 0;
   var estTotal = rateFixed ? (num_(o.fixedTotal) || orderTotalFor_(num_(o.estWt), num_(o.rate), num_(o.makingPerG))) : 0;
   return {
@@ -1209,7 +1301,9 @@ function orderSummary_(o) {
     rate: num_(o.rate), rateFixed: rateFixed, fixedTotal: num_(o.fixedTotal), estTotal: estTotal,
     deliveryDate: o.deliveryDate, status: o.status, karigarId: o.karigarId,
     finalWt: num_(o.finalWt), finalTotal: num_(o.finalTotal), deliveredAt: o.deliveredAt,
-    notes: o.notes, payments: pays, paid: paid,
+    notes: o.notes, payments: pays, paid: paid, refunded: refunded,
+    toBaki: o.status === 'delivered' ? rows_('Dues').filter(function (x) { return x.refType === 'order' && x.refId === o.id; })
+      .reduce(function (a, x) { return a + num_(x.amount); }, 0) : 0,
     balance: o.status === 'delivered' ? 0 : (rateFixed ? estTotal - paid : null)
   };
 }
@@ -1291,20 +1385,27 @@ function orderPay_(user, d) {
 function orderStatus_(user, d) {
   var o = find_('Orders', d.orderId);
   req_(o, 'Order not found');
+  req_(o.status !== 'delivered' && o.status !== 'cancelled', 'This order is already ' + o.status);
   var date = validDate_(d.date);
   var patch = { status: d.status };
+  var allowed = { making: ['booked'], ready: ['booked', 'making'], cancelled: ['booked', 'making', 'ready'], booked: ['making'] };
+  req_(allowed[d.status], 'Unknown status');
+  req_(allowed[d.status].indexOf(o.status) >= 0, 'Order is "' + o.status + '" — cannot change it to "' + d.status + '"');
+  if (d.status === 'cancelled') req_(user.role === 'owner', 'Only the owner can cancel an order');
   if (d.status === 'making') {
     if (d.karigarId) {
       patch.karigarId = d.karigarId;
-      var g = round3_(d.issueFineG);
+      var g = round3_(pos_(d.issueFineG, 'Fine gold'));
       if (g > 0) issueFineToKarigar_(user, d.karigarId, g, 'order', o.id, 'For order: ' + o.item + ' (' + o.customerName + ')', date);
     }
   } else if (d.status === 'ready') {
-    if (num_(d.finalWt) > 0) patch.finalWt = round3_(d.finalWt);
+    if (num_(d.finalWt) > 0) patch.finalWt = round3_(pos_(d.finalWt, 'Weight'));
     var kid = d.karigarId || o.karigarId;
     if (kid) {
       var fw = num_(d.finalWt) || num_(o.estWt);
-      var labour = d.labour !== undefined && d.labour !== '' ? round2_(d.labour) : round2_(fw * num_(o.karigarPerG));
+      var labour = d.labour !== undefined && d.labour !== '' ? round2_(pos_(d.labour, 'Labour')) : round2_(fw * num_(o.karigarPerG));
+      pos_(d.fineUsed, 'Fine gold used');
+      patch.karigarId = kid;
       insert_('PartyLedger', {
         id: uid_('Y'), partyId: kid, date: date, type: 'job_done', goldG: -round3_(d.fineUsed), cash: labour,
         rate: '', refType: 'order', refId: o.id, notes: o.item + ' for ' + o.customerName, by: user.username, at: nowIso_()
@@ -1313,10 +1414,12 @@ function orderStatus_(user, d) {
   } else if (d.status === 'cancelled') {
     var refund = round2_(pos_(d.refund, 'Refund'));
     var paidSoFar = orderPayments_(o.id).reduce(function (a, p) { return a + p.amount; }, 0);
-    req_(refund <= paidSoFar + 1, 'Customer paid only ₹' + Math.round(paidSoFar));
-    if (refund > 0) cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', refund, 'order-refund', 'order', o.id, o.customerName, date);
-  } else {
-    req_(d.status === 'booked', 'Unknown status');
+    req_(refund <= round2_(paidSoFar), 'Customer paid only ₹' + Math.round(paidSoFar));
+    if (refund > 0) {
+      var rmode = d.mode === 'upi' ? 'upi' : 'cash';
+      insert_('OrderPayments', { id: uid_('P'), orderId: o.id, date: date, amount: -refund, mode: rmode, by: user.username, at: nowIso_() });
+      cash_(user, 'out', rmode, refund, 'order-refund', 'order', o.id, o.customerName, date);
+    }
   }
   update_('Orders', o.id, patch);
   audit_(user, 'order.status', o.id, patch);
@@ -1348,6 +1451,14 @@ function orderDeliver_(user, d) {
     duesAdd_(user, cust, due, 'order', o.id, 'Order: ' + o.item, date);
   }
   if (balance < 0) cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', -balance, 'order-refund', 'order', o.id, 'Extra advance returned', date);
+  // Went straight from the karigar to the customer ("Item ready" skipped): book the karigar's labour now.
+  if (o.karigarId && o.status !== 'ready') {
+    var booked = rows_('PartyLedger').some(function (x) { return x.refType === 'order' && x.refId === o.id && x.type === 'job_done'; });
+    if (!booked) insert_('PartyLedger', {
+      id: uid_('Y'), partyId: o.karigarId, date: date, type: 'job_done', goldG: 0, cash: round2_(finalWt * num_(o.karigarPerG)),
+      rate: '', refType: 'order', refId: o.id, notes: o.item + ' for ' + o.customerName, by: user.username, at: nowIso_()
+    });
+  }
   update_('Orders', o.id, {
     status: 'delivered', finalWt: finalWt, finalTotal: total, rate: rate, deliveredAt: date
   });
@@ -1400,6 +1511,7 @@ function repairReturn_(user, d) {
   var r = find_('Repairs', d.id);
   req_(r, 'Repair not found');
   req_(r.status !== 'delivered', 'Already given back');
+  req_(r.status !== 'ready', 'Already back from the karigar');
   var cost = d.karigarCost !== undefined && d.karigarCost !== '' ? round2_(pos_(d.karigarCost, 'Karigar cost'))
     : repairAmount_(r.karigarRateType, r.karigarRate, r.wtIn);
   var date = validDate_(d.date);
@@ -1434,9 +1546,19 @@ function repairDeliver_(user, d) {
   if (charge - got >= 1) duesAdd_(user, find_('Customers', r.customerId), Math.round(charge - got), 'repair', r.id, 'Repair: ' + r.item, date);
   var patch = { status: 'delivered', custCharge: charge, deliveredAt: date };
   if (!r.returnedAt) {
+    // Given back without "Back from karigar": book the karigar's cost now so nobody's account is missed.
     patch.returnedAt = date;
     patch.wtOut = r.wtOut || r.wtIn;
-    if (r.karigarCost === '') patch.karigarCost = repairAmount_(r.karigarRateType, r.karigarRate, r.wtIn);
+    var kc = r.karigarCost === '' ? repairAmount_(r.karigarRateType, r.karigarRate, r.wtIn) : num_(r.karigarCost);
+    patch.karigarCost = r.karigarId || kc > 0 ? kc : 0;
+    if (r.karigarId && kc > 0) {
+      insert_('PartyLedger', {
+        id: uid_('Y'), partyId: r.karigarId, date: date, type: 'job_done', goldG: 0, cash: kc, rate: '',
+        refType: 'repair', refId: r.id, notes: r.work + ': ' + r.item + ' (' + r.customerName + ')', by: user.username, at: nowIso_()
+      });
+    } else if (kc > 0) {
+      cash_(user, 'out', 'cash', kc, 'repair-cost', 'repair', r.id, r.item, date);
+    }
   }
   var saved = update_('Repairs', r.id, patch);
   audit_(user, 'repair.deliver', r.id, { charge: charge });
@@ -1457,9 +1579,18 @@ function stockAdd_(user, d) {
   var items = d.items || [];
   req_(items.length, 'Add at least one item');
   var saved = [];
+  var tags = {};
+  rows_('Items').forEach(function (i) { if (i.tag) tags[i.tag.toLowerCase()] = 1; });
+  // Check every row before saving any, so a mistake in one row never half-saves the others.
+  items.forEach(function (it) {
+    ['netWt', 'grossWt', 'pieces', 'makingPerG', 'costTotal', 'purityPct'].forEach(function (k) { pos_(it[k], k); });
+    req_(num_(it.purityPct) <= 100, 'Purity % should be 100 or less');
+    req_(round3_(it.netWt || it.grossWt) > 0, 'Enter the weight for ' + (it.name || 'the item'));
+    var tg = String(it.tag || '').trim().toLowerCase();
+    if (tg) { req_(!tags[tg], 'Tag ' + it.tag + ' is already used'); tags[tg] = 1; }
+  });
   items.forEach(function (it) {
     var net = round3_(it.netWt || it.grossWt);
-    req_(net > 0, 'Enter the weight for ' + (it.name || 'the item'));
     var tag = String(it.tag || '').trim();
     if (!tag) tag = 'T' + String(nextCounter_('tag')).padStart(5, '0');
     var rec = {
@@ -1512,11 +1643,9 @@ function stockSummary_() {
   var list = Object.keys(groups).map(function (k) { return groups[k]; });
   list.sort(function (a, b) { return b.netWt - a.netWt; });
   var today = today_();
-  var soldToday = rows_('Items').filter(function (i) {
-    if (i.status !== 'sold' || !i.soldBillId) return false;
-    var b = find_('Sales', i.soldBillId);
-    return b && b.date === today;
-  }).length;
+  var todayBills = {};
+  rows_('Sales').forEach(function (b) { if (b.date === today && b.status !== 'void') todayBills[b.id] = 1; });
+  var soldToday = rows_('Items').filter(function (i) { return i.soldBillId && todayBills[i.soldBillId]; }).length;
   return { categories: list, totals: totals, soldToday: soldToday,
     categoriesList: json_(settings_().item_categories, []) };
 }
@@ -1530,8 +1659,11 @@ function stockUpdate_(user, d) {
     if (d[k] !== undefined && d[k] !== '') patch[k] = pos_(d[k], k);
   });
   req_(i.status === 'in' || d.status, 'This item is already sold');
+  if (patch.pieces !== undefined) req_(patch.pieces >= 1, 'Pieces should be at least 1');
+  if (patch.purityPct !== undefined) req_(patch.purityPct <= 100, 'Purity % should be 100 or less');
   if (d.status) {
     req_(['in', 'removed'].indexOf(d.status) >= 0, 'Bad status');
+    req_(i.status !== 'sold', 'This item is sold. To bring it back, cancel its bill.');
     patch.status = d.status;
   }
   var saved = update_('Items', i.id, patch);
@@ -1549,16 +1681,20 @@ function fineEntry_(user, type, grams, value, refType, refId, notes, date) {
 }
 
 function meltCreate_(user, d) {
-  var ids = d.oldGoldIds || [];
+  var ids = (d.oldGoldIds || []).filter(function (x, i, a) { return a.indexOf(x) === i; });
   req_(ids.length, 'Pick the old gold items to melt');
-  var barWt = round3_(d.barWt), purity = num_(d.purityPct);
+  var barWt = round3_(pos_(d.barWt, 'Bar weight')), purity = pos_(d.purityPct, 'Purity');
   req_(barWt > 0 && purity > 0, 'Enter bar weight and tested purity');
+  req_(purity <= 100, 'Purity % should be 100 or less');
+  pos_(d.cost, 'Charge');
   var totalWt = 0, ourFine = 0, paidFine = 0, paidAmount = 0;
   ids.forEach(function (gid) {
     var g = find_('OldGold', gid);
     req_(g && g.status === 'stock', 'An item is not in old gold stock');
+    req_(g.metal !== 'silver', 'Silver cannot be melted into fine gold');
     totalWt += num_(g.weight); ourFine += num_(g.ourFine); paidFine += num_(g.customerFine); paidAmount += num_(g.amount);
   });
+  req_(barWt <= round3_(totalWt) + 0.0005, 'Bar weight (' + barWt + ' g) cannot be more than the old gold melted (' + round3_(totalWt) + ' g)');
   var actualFine = round3_(barWt * purity / 100);
   var cost = round2_(d.cost);
   var date = validDate_(d.date);
@@ -1616,9 +1752,18 @@ function fineSummary_() {
   };
 }
 
+function fineInHand_() {
+  return round3_(rows_('FineLedger').reduce(function (a, f) { return a + num_(f.grams); }, 0));
+}
+function needFine_(grams) {
+  var have = fineInHand_();
+  req_(grams <= have + 0.0005, 'Only ' + have + ' g fine gold in hand');
+}
+
 function issueFineToKarigar_(user, karigarId, grams, refType, refId, notes, date) {
   var p = find_('Parties', karigarId);
   req_(p && p.type === 'karigar', 'Karigar not found');
+  needFine_(grams);
   fineEntry_(user, 'karigar_out', -grams, 0, refType, refId, 'To ' + p.name + ': ' + notes, date);
   insert_('PartyLedger', {
     id: uid_('Y'), partyId: p.id, date: validDate_(date), type: 'issue_gold', goldG: round3_(grams), cash: 0,
@@ -1653,7 +1798,9 @@ function partySave_(user, d) {
     mobile: cleanMobile_(d.mobile), notes: String(d.notes || '') };
   if (d.id) {
     if (d.active !== undefined) rec.active = d.active ? 'true' : 'false';
-    return update_('Parties', d.id, rec);
+    var saved = update_('Parties', d.id, rec);
+    audit_(user, 'party.edit', d.id, rec);
+    return saved;
   }
   rec.id = uid_('Q'); rec.active = 'true'; rec.createdAt = nowIso_();
   insert_('Parties', rec);
@@ -1701,6 +1848,7 @@ function partyEntry_(user, d) {
       }
     } else if (d.type === 'pay_gold') {
       req_(g > 0, 'Enter grams given');
+      needFine_(g);
       e.goldG = -g;
       fineEntry_(user, 'wholesaler_out', -g, 0, 'party', p.id, 'To ' + p.name, date);
     } else if (d.type === 'pay_cash_rate') {
@@ -1715,6 +1863,7 @@ function partyEntry_(user, d) {
   } else {
     if (d.type === 'issue_gold') {
       req_(g > 0, 'Enter grams given');
+      needFine_(g);
       e.goldG = g;
       fineEntry_(user, 'karigar_out', -g, 0, 'party', p.id, 'To ' + p.name, date);
     } else if (d.type === 'return_gold') {
@@ -1722,6 +1871,7 @@ function partyEntry_(user, d) {
       e.goldG = -g;
       fineEntry_(user, 'karigar_return', g, 0, 'party', p.id, 'From ' + p.name, date);
     } else if (d.type === 'job_done') {
+      req_(g > 0 || c > 0, 'Enter the fine gold used or the labour');
       e.goldG = -g; e.cash = c;
       if (d.items && d.items.length) stockAdd_(user, { items: d.items, source: 'karigar', sourceId: e.id });
     } else if (d.type === 'pay_labour') {
@@ -1732,7 +1882,9 @@ function partyEntry_(user, d) {
   }
   insert_('PartyLedger', e);
   audit_(user, 'party.' + d.type, p.id, { goldG: e.goldG, cash: e.cash });
-  return partyLedger_(p.id);
+  var led = partyLedger_(p.id);
+  if (led.entries && led.entries.length > 60) led.entries = led.entries.slice(0, 60); // keep the reply small
+  return led;
 }
 
 /* ---------- Cash book ---------- */
@@ -1741,15 +1893,19 @@ function cashBalanceBefore_(date, mode) {
   var s = settings_();
   var openDate = s.cash_opening_date || '0000-00-00';
   var bal = mode === 'cash' ? num_(s.cash_opening) : 0;
+  // The opening amount is the drawer at the start of the opening date. Days before it are worked out backwards.
+  var back = date < openDate;
   rows_('Cash').forEach(function (c) {
-    if (c.mode !== mode || c.date < openDate || c.date >= date) return;
-    bal += c.dir === 'in' ? num_(c.amount) : -num_(c.amount);
+    if (c.mode !== mode) return;
+    var sign = c.dir === 'in' ? 1 : -1;
+    if (back) { if (c.date >= date && c.date < openDate) bal -= sign * num_(c.amount); }
+    else if (c.date >= openDate && c.date < date) bal += sign * num_(c.amount);
   });
   return round2_(bal);
 }
 
 function cashList_(d) {
-  var from = validDate_(d.from), to = d.to ? validDate_(d.to) : from;
+  var from = readDate_(d.from), to = d.to ? readDate_(d.to) : from;
   var entries = rows_('Cash').filter(function (c) { return c.date >= from && c.date <= to; }).map(function (c) {
     return { id: c.id, date: c.date, dir: c.dir, mode: c.mode, amount: num_(c.amount), category: c.category,
       refType: c.refType, notes: c.notes, by: c.by, at: c.at };
@@ -1775,6 +1931,8 @@ function cashAdd_(user, d) {
 }
 
 function cashOpening_(user, d) {
+  req_(d.amount !== '' && d.amount !== undefined && !isNaN(parseFloat(String(d.amount).replace(/,/g, ''))), 'Enter the cash in the drawer');
+  pos_(d.amount, 'Opening cash');
   setSetting_('cash_opening', String(round2_(d.amount)));
   setSetting_('cash_opening_date', validDate_(d.date));
   audit_(user, 'cash.opening', '', d);
@@ -1785,7 +1943,7 @@ function cashOpening_(user, d) {
 /* ---------- Reports ---------- */
 
 function reportDaily_(date) {
-  date = validDate_(date);
+  date = readDate_(date);
   var rate = rateOn_(date) || { g24: 0 };
   var sales = rows_('Sales').filter(function (b) { return b.date === date && b.status !== 'void'; });
   var salesTotal = 0, salesProfit = 0, taxTotal = 0, unknownCostLines = 0;
@@ -1803,12 +1961,17 @@ function reportDaily_(date) {
     interest += num_(t.interestPart);
     if (t.type === 'close') loansClosed++;
   });
-  var newLoans = rows_('Loans').filter(function (l) { return l.date === date; });
+  var newLoans = rows_('Loans').filter(function (l) { return l.date === date && l.status !== 'void'; });
   var repairs = rows_('Repairs').filter(function (r) { return r.deliveredAt === date; });
   var repairProfit = repairs.reduce(function (a, r) { return a + num_(r.custCharge) - num_(r.karigarCost); }, 0);
-  var delivered = rows_('Orders').filter(function (o) { return o.deliveredAt === date; });
+  var delivered = rows_('Orders').filter(function (o) { return o.deliveredAt === date && o.status === 'delivered'; });
+  // Making profit = making charged to the customer − labour actually booked to the karigar for that order.
+  var labourOf = {};
+  rows_('PartyLedger').forEach(function (e) {
+    if (e.refType === 'order' && e.type === 'job_done') labourOf[e.refId] = (labourOf[e.refId] || 0) + num_(e.cash);
+  });
   var makingProfit = delivered.reduce(function (a, o) {
-    return a + (num_(o.makingPerG) - num_(o.karigarPerG)) * num_(o.finalWt);
+    return a + num_(o.makingPerG) * num_(o.finalWt) - (labourOf[o.id] || 0);
   }, 0);
   var melts = rows_('Melts').filter(function (m) { return m.date === date; });
   var meltGain = melts.reduce(function (a, m) {
@@ -1817,23 +1980,27 @@ function reportDaily_(date) {
   var cashEntries = rows_('Cash').filter(function (c) { return c.date === date; });
   var expenses = cashEntries.filter(function (c) { return c.dir === 'out' && c.category === 'expense'; })
     .reduce(function (a, c) { return a + num_(c.amount); }, 0);
+  var otherIncome = cashEntries.filter(function (c) { return c.dir === 'in' && c.category === 'other-income'; })
+    .reduce(function (a, c) { return a + num_(c.amount); }, 0);
   var oldBought = rows_('OldGold').filter(function (g) { return g.date === date && g.status !== 'void'; });
-  var booked = rows_('Orders').filter(function (o) { return o.date === date; });
+  var booked = rows_('Orders').filter(function (o) { return o.date === date && o.status !== 'cancelled'; });
   var cash = cashList_({ from: date, to: date });
-  var profit = salesProfit + interest + repairProfit + makingProfit + meltGain - expenses;
+  var profit = salesProfit + interest + repairProfit + makingProfit + meltGain + otherIncome - expenses;
   return {
     date: date,
     profit: Math.round(profit),
     parts: {
       sales: Math.round(salesProfit), interest: Math.round(interest), repair: Math.round(repairProfit),
-      making: Math.round(makingProfit), melting: Math.round(meltGain), expenses: Math.round(expenses)
+      making: Math.round(makingProfit), melting: Math.round(meltGain), other: Math.round(otherIncome), expenses: Math.round(expenses)
     },
     unknownCostLines: unknownCostLines,
     sales: { count: sales.length, total: Math.round(salesTotal), tax: round2_(taxTotal),
       gst: sales.filter(function (b) { return b.type === 'GST'; }).length },
     loans: { newCount: newLoans.length, newAmount: Math.round(newLoans.reduce(function (a, l) { return a + num_(l.principal); }, 0)),
       closed: loansClosed },
-    oldGold: { count: oldBought.length, weight: round3_(oldBought.reduce(function (a, g) { return a + num_(g.weight); }, 0)),
+    oldGold: { count: oldBought.length,
+      weight: round3_(oldBought.filter(function (g) { return g.metal !== 'silver'; }).reduce(function (a, g) { return a + num_(g.weight); }, 0)),
+      silverWeight: round3_(oldBought.filter(function (g) { return g.metal === 'silver'; }).reduce(function (a, g) { return a + num_(g.weight); }, 0)),
       amount: Math.round(oldBought.reduce(function (a, g) { return a + num_(g.amount); }, 0)) },
     orders: { booked: booked.length, delivered: delivered.length },
     repairs: { delivered: repairs.length },
@@ -1848,7 +2015,7 @@ function reportMonth_(month) {
   var days = new Date(y, m, 0).getDate();
   var t = today_();
   var out = [], total = 0;
-  var parts = { sales: 0, interest: 0, repair: 0, making: 0, melting: 0, expenses: 0 };
+  var parts = { sales: 0, interest: 0, repair: 0, making: 0, melting: 0, other: 0, expenses: 0 };
   for (var d = 1; d <= days; d++) {
     var date = month + '-' + String(d).padStart(2, '0');
     if (date > t) break;
@@ -1926,7 +2093,7 @@ function reportHtml_(date) {
     '<h3 style="margin:12px 0 4px">Profit today: ' + r(d.profit) + '</h3><table>' +
     row('Sales (' + d.sales.count + ' bills)', r(d.parts.sales)) + row('Girvi interest received', r(d.parts.interest)) +
     row('Repair profit', r(d.parts.repair)) + row('Order making profit', r(d.parts.making)) +
-    row('Melting gain', r(d.parts.melting)) + row('Expenses', '− ' + r(d.parts.expenses)) + '</table>' +
+    row('Melting gain', r(d.parts.melting)) + row('Other income', r(d.parts.other)) + row('Expenses', '− ' + r(d.parts.expenses)) + '</table>' +
     '<h3 style="margin:16px 0 4px">Cash</h3><table>' +
     row('Opening', r(d.cash.opening)) + row('In', r(d.cash.cashIn)) + row('Out', r(d.cash.cashOut)) +
     row('Should be in drawer', r(d.cash.closing)) + row('UPI in / out', r(d.cash.upiIn) + ' / ' + r(d.cash.upiOut)) + '</table>' +
@@ -1939,6 +2106,14 @@ function reportHtml_(date) {
     row('Old gold not melted', Calc.inr(p.fine.oldGold.weight, 3) + ' g') +
     row('Fine gold in hand', Calc.inr(p.fine.inHand, 3) + ' g') +
     row('Gold with karigars', Calc.inr(p.karigars.goldG, 3) + ' g') + '</table></div>';
+}
+
+/** Purchase cost and profit are for the owner only. */
+function hideProfit_(user, rep) {
+  if (user && user.role === 'owner') return rep;
+  rep.profit = null; rep.parts = null; rep.unknownCostLines = 0;
+  if (rep.days) rep.days.forEach(function (d) { d.profit = null; });
+  return rep;
 }
 
 /* ===== 16_dues_edits.js ===== */
@@ -1990,10 +2165,10 @@ function duesPay_(user, d) {
   var amt = round2_(d.amount);
   req_(amt > 0, 'Enter the amount received');
   var due = customerUdhaar_(c.id);
-  req_(amt <= due + 1, 'Customer owes only ₹' + Math.round(due));
+  req_(amt <= round2_(due) + 0.5, 'Customer owes only ₹' + Math.round(due));
   var date = validDate_(d.date);
-  duesAdd_(user, c, -amt, 'payment', '', d.notes || 'Received', date);
-  cash_(user, 'in', d.mode === 'upi' ? 'upi' : 'cash', amt, 'udhaar', 'udhaar', c.id, customerName_(c), date);
+  var cr = cash_(user, 'in', d.mode === 'upi' ? 'upi' : 'cash', amt, 'udhaar', 'udhaar', c.id, customerName_(c), date);
+  duesAdd_(user, c, -amt, 'payment', '', 'Received (' + cr.id + ')' + (d.notes ? ' ' + d.notes : ''), date);
   audit_(user, 'dues.pay', c.id, { amount: amt });
   return { udhaar: customerUdhaar_(c.id) };
 }
@@ -2004,6 +2179,7 @@ function duesAdjust_(user, d) {
   req_(c, 'Customer not found');
   var amt = round2_(d.amount);
   req_(amt !== 0, 'Enter the amount');
+  if (amt < 0) { var owes = customerUdhaar_(c.id); req_(-amt <= round2_(owes) + 0.01, 'Customer owes only ₹' + Math.round(owes)); }
   duesAdd_(user, c, amt, 'adjust', '', d.notes || (amt < 0 ? 'Written off' : 'Added'), d.date);
   audit_(user, 'dues.adjust', c.id, { amount: amt, notes: d.notes || '' });
   return { udhaar: customerUdhaar_(c.id) };
@@ -2021,13 +2197,14 @@ function loanEdit_(user, d) {
     if (d[k] !== undefined && d[k] !== '') { req_(num_(d[k]) >= 0, 'Values cannot be negative'); patch[k] = num_(d[k]); }
   });
   var hasTx = loanTxns_(l.id).length > 0;
+  if (patch.ratePct !== undefined && patch.ratePct !== num_(l.ratePct)) req_(!hasTx, 'Interest rate cannot change after payments; cancel the payments first');
   if (d.date && d.date !== l.date) { req_(!hasTx, 'Date cannot change after payments; cancel the payments first'); patch.date = validDate_(d.date); }
   if (d.principal !== undefined && d.principal !== '' && num_(d.principal) !== num_(l.principal)) {
     req_(!hasTx, 'Amount cannot change after payments; cancel the payments first');
     var np = round2_(d.principal);
     req_(np > 0, 'Enter the loan amount');
     var diff = np - num_(l.principal);
-    cash_(user, diff > 0 ? 'out' : 'in', 'cash', Math.abs(diff), 'girvi-given', 'loan', l.id, 'Correction: ' + l.customerName, l.date);
+    cash_(user, diff > 0 ? 'out' : 'in', l.mode || 'cash', Math.abs(diff), 'girvi-given', 'loan', l.id, 'Correction: ' + l.customerName, l.date);
     patch.principal = np;
   }
   update_('Loans', l.id, patch);
@@ -2042,7 +2219,7 @@ function loanVoid_(user, d) {
   req_(l.status === 'open', 'Only an open loan can be cancelled');
   req_(loanTxns_(l.id).length === 0, 'Cancel the payments on this loan first');
   update_('Loans', l.id, { status: 'void', closedAt: today_(), notes: (l.notes ? l.notes + ' · ' : '') + 'Cancelled: ' + (d.reason || '') });
-  cash_(user, 'in', 'cash', num_(l.principal), 'girvi-cancel', 'loan', l.id, 'Cancelled entry: ' + l.customerName);
+  cash_(user, 'in', l.mode || 'cash', num_(l.principal), 'girvi-cancel', 'loan', l.id, 'Cancelled entry: ' + l.customerName);
   audit_(user, 'loan.void', l.id, { reason: d.reason || '' });
   return { ok: true };
 }
@@ -2058,7 +2235,14 @@ function loanUndoLast_(user, d) {
   var amt = num_(t.amount);
   if (t.type === 'topup') cash_(user, 'in', t.mode, amt, 'girvi-cancel', 'loan', l.id, 'Undo top-up: ' + l.customerName);
   else cash_(user, 'out', t.mode, amt, 'girvi-cancel', 'loan', l.id, 'Undo payment: ' + l.customerName);
-  if (t.type === 'close') update_('Loans', l.id, { status: 'open', closedAt: '' });
+  if (t.type === 'close') {
+    update_('Loans', l.id, { status: 'open', closedAt: '' });
+    // The balance that went to Baki at release is taken back too.
+    var c = find_('Customers', l.customerId);
+    var put = rows_('Dues').filter(function (x) { return x.refType === 'loan' && x.refId === l.id; })
+      .reduce(function (a, x) { return a + num_(x.amount); }, 0);
+    if (c && put > 0) duesAdd_(user, c, -put, 'loan', l.id, 'Girvi release undone');
+  }
   audit_(user, 'loan.undo', l.id, { txn: t.id, type: t.type, amount: amt });
   return loanGet_(l.id);
 }
@@ -2072,6 +2256,7 @@ function orderEdit_(user, d) {
   ['purityPct', 'estWt', 'makingPerG', 'karigarPerG'].forEach(function (k) {
     if (d[k] !== undefined && d[k] !== '') { req_(num_(d[k]) >= 0, 'Values cannot be negative'); patch[k] = num_(d[k]); }
   });
+  if (patch.estWt !== undefined) req_(patch.estWt > 0, 'Enter the approximate weight');
   if (d.rate !== undefined && d.rate !== '' && num_(o.rate) > 0) { req_(num_(d.rate) > 0, 'Enter the rate'); patch.rate = num_(d.rate); }
   var w = patch.estWt !== undefined ? patch.estWt : num_(o.estWt);
   var r = patch.rate !== undefined ? patch.rate : num_(o.rate);
@@ -2088,6 +2273,7 @@ function repairEdit_(user, d) {
   req_(r.status !== 'delivered', 'Already given back');
   var patch = {};
   ['item', 'work', 'notes', 'deliveryDate'].forEach(function (k) { if (d[k] !== undefined) patch[k] = String(d[k]); });
+  if (d.wtIn !== undefined && d.wtIn !== '' && num_(d.wtIn) !== num_(r.wtIn)) req_(!r.returnedAt, 'Weight in cannot change after the item came back from the karigar');
   ['wtIn', 'karigarRate', 'custRate'].forEach(function (k) {
     if (d[k] !== undefined && d[k] !== '') { req_(num_(d[k]) >= 0, 'Values cannot be negative'); patch[k] = num_(d[k]); }
   });
@@ -2125,19 +2311,35 @@ function homeSummary_() {
   };
 }
 
-/** v1.0 kept udhaar only on bills. Copy it into the Dues tab once (runs on the first save after updating). */
+/** v1.0 kept udhaar only on bills. Copy it into the Dues tab once (runs on the first save after updating).
+ *  Safe to run again: bills and payments already copied are skipped. */
 function migrateDues_() {
   if (settings_().dues_v === '1') return;
+  var have = {};
+  rows_('Dues').forEach(function (x) { have[x.refType + '|' + (x.refType === 'payment' ? x.notes : x.refId)] = 1; });
+  var custs = {};
+  rows_('Customers').forEach(function (c) { custs[c.id] = c; });
+  var out = [];
+  var add = function (c, amount, refType, refId, notes, date) {
+    out.push({ id: uid_('D'), date: date, customerId: c.id, customerName: customerName_(c), mobile: c.mobile,
+      amount: round2_(amount), refType: refType, refId: refId, notes: notes, by: 'update', at: nowIso_() });
+  };
   rows_('Sales').forEach(function (s) {
-    if (s.status === 'void' || num_(s.udhaar) <= 0) return;
-    var c = find_('Customers', s.customerId);
-    if (c) duesAdd_(null, c, num_(s.udhaar), 'sale', s.id, 'Bill ' + s.billNo, s.date);
+    if (s.status === 'void' || num_(s.udhaar) <= 0 || have['sale|' + s.id]) return;
+    if (custs[s.customerId]) add(custs[s.customerId], num_(s.udhaar), 'sale', s.id, 'Bill ' + s.billNo, s.date);
   });
   rows_('Cash').forEach(function (x) {
-    if (x.refType !== 'udhaar') return;
-    var c = find_('Customers', x.refId);
-    if (c) duesAdd_(null, c, -num_(x.amount), 'payment', '', 'Received', x.date);
+    var key = 'payment|Received (' + x.id + ')';
+    if (x.refType !== 'udhaar' || have[key]) return;
+    if (custs[x.refId]) add(custs[x.refId], -num_(x.amount), 'payment', '', 'Received (' + x.id + ')', x.date);
   });
+  if (out.length) {
+    var headers = SCHEMA.Dues;
+    var sh = sheet_('Dues');
+    sh.getRange(sh.getLastRow() + 1, 1, out.length, headers.length)
+      .setValues(out.map(function (o) { return headers.map(function (h) { return toCell_(o[h]); }); }));
+    delete _rowsCache.Dues;
+  }
   setSetting_('dues_v', '1');
 }
 
@@ -2262,19 +2464,30 @@ function archiveFy_(user, fy) {
   var all = rows_('Sales');
   var move = all.filter(function (r) { return r.fy === fy; });
   req_(move.length, 'No bills for ' + fy);
-  var arch = SpreadsheetApp.create(ss_().getName() + ' — bills FY ' + fy);
-  var ash = arch.getSheets()[0];
-  ash.setName('Sales');
-  ash.getRange('A:' + colLetter_(headers.length)).setNumberFormat('@');
-  var data = [headers].concat(move.map(function (r) { return headers.map(function (h) { return r[h]; }); }));
-  ash.getRange(1, 1, data.length, headers.length).setValues(data);
+  var oldId = settings_()['archive_' + fy];
+  var arch, ash;
+  if (oldId) {
+    // Archived before (a late bill was added for that year): add to the same file.
+    arch = SpreadsheetApp.openById(oldId);
+    ash = arch.getSheetByName('Sales');
+  } else {
+    arch = SpreadsheetApp.create(ss_().getName() + ' — bills FY ' + fy);
+    ash = arch.getSheets()[0];
+    ash.setName('Sales');
+    ash.getRange('A:' + colLetter_(headers.length)).setNumberFormat('@');
+    ash.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
+  var rowsOut = move.map(function (r) { return headers.map(function (h) { return toCell_(r[h]); }); });
+  ash.getRange(Math.max(ash.getLastRow(), 1) + 1, 1, rowsOut.length, headers.length).setValues(rowsOut);
   var keep = all.filter(function (r) { return r.fy !== fy; }).map(function (r) {
-    return headers.map(function (h) { return r[h]; });
+    return headers.map(function (h) { return toCell_(r[h]); });
   });
-  sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), headers.length).clearContent();
+  // Write the kept bills first, then clear what is left below: nothing is lost if the script stops half way.
+  var last = sh.getLastRow();
   if (keep.length) sh.getRange(2, 1, keep.length, headers.length).setValues(keep);
+  if (last > keep.length + 1) sh.getRange(keep.length + 2, 1, last - keep.length - 1, headers.length).clearContent();
   delete _rowsCache.Sales;
-  setSetting_('archive_' + fy, arch.getId());
+  if (!oldId) setSetting_('archive_' + fy, arch.getId());
   audit_(user, 'archive', fy, { bills: move.length, file: arch.getId() });
   return { moved: move.length, fileUrl: arch.getUrl() };
 }
@@ -2476,13 +2689,28 @@ var Calc = (function () {
     var events = (txns || []).slice().sort(function (a, b) {
       return parseD(a.date) - parseD(b.date);
     });
+    var minDays = parseFloat(loan.minDays !== undefined && loan.minDays !== '' ? loan.minDays : opts.minDays) || 0;
+    if (opts.noMinimum) minDays = 0;
+    var minDone = false;
+    var lent = P; // amount lent, with top-ups: the minimum interest is on this, not on what is left
+    function addMinimum(onDate) {
+      var d = daysBetween(loan.date, onDate);
+      if (minDone || !(minDays > 0) || d >= minDays) return;
+      var extra = r2(evalFormula(formula, { Principal: lent, Rate: rate, Days: minDays }) - totalInterest);
+      minDone = true;
+      if (extra <= 0) return;
+      A += extra; totalInterest += extra;
+      rows.push({ kind: 'minimum', label: 'Minimum ' + minDays + ' days', days: minDays - d, principal: lent, interest: extra });
+    }
     events.forEach(function (e) {
       var t = parseD(e.date);
       if (t > end) return;
       accrue(t);
+      // Releasing inside the minimum period: the minimum interest is charged before the release payment.
+      if (e.type === 'close') addMinimum(e.date);
       var amt = parseFloat(String(e.amount).replace(/,/g, '')) || 0;
       if (e.type === 'topup') {
-        P += amt;
+        P += amt; lent += amt;
         rows.push({ kind: 'topup', date: e.date, amount: amt, principal: P });
       } else if (e.type === 'interest') {
         A -= amt; paidInterest += amt;
@@ -2497,14 +2725,8 @@ var Calc = (function () {
     });
     accrue(end);
 
-    var totalDays = daysBetween(loan.date, asOf);
-    var minDays = parseFloat(loan.minDays !== undefined && loan.minDays !== '' ? loan.minDays : opts.minDays) || 0;
-    if (minDays > 0 && totalDays < minDays && P > 0) {
-      var extra = r2(evalFormula(formula, { Principal: P, Rate: rate, Days: minDays - totalDays }));
-      A += extra; totalInterest += extra;
-      rows.push({ kind: 'minimum', label: 'Minimum ' + minDays + ' days', days: minDays - totalDays,
-        principal: P, interest: extra });
-    }
+    var totalDays = Math.max(daysBetween(loan.date, asOf), 0);
+    addMinimum(asOf);
 
     return {
       rows: rows,
@@ -2549,7 +2771,7 @@ var Calc = (function () {
     var crore = Math.floor(n / 10000000); n %= 10000000;
     var lakh = Math.floor(n / 100000); n %= 100000;
     var th = Math.floor(n / 1000); n %= 1000;
-    if (crore) parts.push(two(crore) + ' Crore');
+    if (crore) parts.push((crore < 100 ? two(crore) : inWords(crore)) + ' Crore');
     if (lakh) parts.push(two(lakh) + ' Lakh');
     if (th) parts.push(two(th) + ' Thousand');
     if (n) parts.push(three(n));

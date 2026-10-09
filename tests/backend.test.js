@@ -242,6 +242,69 @@ test('owner can correct and cancel old records', () => {
   assert.ok(/owner/.test(call('cash.void', { id: e.id }, E).error));
 });
 
+test('QA round: money stays consistent in the tricky cases', () => {
+  const c = ok('customers.save', { firstName: 'Qa', lastName: 'Case', mobile: '9000000099' }, T);
+  // girvi: rest-to-baki release can be undone, baki goes back
+  const l = ok('loans.create', { customerId: c.id, item: 'Ring', grossWt: 5, principal: 10000, ratePct: 2, date: '2026-09-08', mode: 'upi' }, T);
+  ok('loans.pay', { loanId: l.id, type: 'close', amount: 8000, date: '2026-10-08', restToBaki: true }, T);
+  assert.strictEqual(ok('customers.get', { id: c.id }, T).udhaar, 2200);
+  ok('loans.undoLast', { id: l.id }, T);
+  assert.strictEqual(ok('customers.get', { id: c.id }, T).udhaar, 0);
+  assert.ok(/Interest due is only/.test(call('loans.pay', { loanId: l.id, type: 'interest', amount: 5000, date: '2026-10-08' }, T).error));
+  ok('loans.pay', { loanId: l.id, type: 'part', amount: 1000, date: '2026-10-08' }, T);
+  assert.ok(/later payment/.test(call('loans.pay', { loanId: l.id, type: 'part', amount: 100, date: '2026-10-01' }, T).error));
+  assert.ok(/future/.test(call('loans.pay', { loanId: l.id, type: 'part', amount: 100, date: '2026-12-01' }, T).error));
+  // minimum days: release inside the minimum period leaves nothing negative
+  ok('settings.save', { interest_min_days: '30' }, T);
+  const m = ok('loans.create', { customerId: c.id, item: 'Chain', grossWt: 5, principal: 10000, ratePct: 3, date: '2026-09-28' }, T);
+  const due = ok('loans.get', { id: m.id, asOf: '2026-10-08' }, T).statement.totalDue;
+  assert.strictEqual(due, 10300);
+  const closed = ok('loans.pay', { loanId: m.id, type: 'close', date: '2026-10-08' }, T);
+  assert.strictEqual(closed.statement.principal, 0);
+  assert.strictEqual(closed.statement.totalDue, 0);
+  ok('settings.save', { interest_min_days: '0' }, T);
+  // order: cannot cancel twice, refund recorded once
+  const o = ok('orders.create', { customerId: c.id, method: 'A', estWt: 2, rate: 10000, advance: 5000 }, T);
+  ok('orders.status', { orderId: o.id, status: 'cancelled', refund: 5000 }, T);
+  assert.ok(/already/.test(call('orders.status', { orderId: o.id, status: 'cancelled', refund: 5000 }, T).error));
+  assert.strictEqual(ok('orders.get', { id: o.id }, T).refunded, 5000);
+  // bill cancel after its baki was paid back: the paid part is returned, no hidden credit
+  const b = ok('sale.create', { type: 'EST', customerId: c.id, lines: [{ name: 'Ring', weight: 1, rate: 10000 }], cash: 4000, udhaar: 6000 }, T);
+  ok('dues.pay', { customerId: c.id, amount: 6000 }, T);
+  const v = ok('sale.void', { id: b.id }, T);
+  assert.strictEqual(v.returned, 6000);
+  assert.strictEqual(ok('customers.get', { id: c.id }, T).udhaar, 0);
+  // stock: weight-only lot sold in part stays in stock; over-selling refused; same piece twice refused
+  const lot = ok('stock.add', { items: [{ name: 'Loose chain', netWt: 30, pieces: 1 }] }, T)[0];
+  ok('sale.create', { type: 'EST', customerId: c.id, lines: [{ itemId: lot.id, weight: 10, rate: 100 }], cash: 1000 }, T);
+  const left = ok('stock.list', { q: 'loose chain' }, T)[0];
+  assert.strictEqual(left.netWt, 20);
+  assert.ok(/Only 20 g/.test(call('sale.create', { type: 'EST', customerId: c.id, lines: [{ itemId: lot.id, weight: 25, rate: 100 }], cash: 2500 }, T).error));
+  assert.ok(/twice/.test(call('sale.create', { type: 'EST', customerId: c.id, lines: [{ itemId: lot.id, weight: 5, rate: 100 }, { itemId: lot.id, weight: 5, rate: 100 }], cash: 1000 }, T).error));
+  // old gold limits
+  assert.ok(/Cut %/.test(call('oldgold.buy', { customerId: c.id, items: [{ weight: 2, cutPct: 120, rate: 15000 }] }, T).error));
+  // fine gold cannot go below zero
+  const k = ok('parties.save', { type: 'karigar', name: 'QA Karigar' }, T);
+  assert.ok(/fine gold in hand/.test(call('parties.entry', { partyId: k.id, type: 'issue_gold', goldG: 500 }, T).error));
+  // minimum days cannot be dodged by paying it all as "part" first
+  ok('settings.save', { interest_min_days: '30' }, T);
+  const md = ok('loans.create', { customerId: c.id, item: 'Kada', grossWt: 5, principal: 10000, ratePct: 3, date: '2026-10-01' }, T);
+  ok('loans.pay', { loanId: md.id, type: 'part', amount: 10000, date: '2026-10-08' }, T);
+  const rel = ok('loans.get', { id: md.id, asOf: '2026-10-08' }, T).statement;
+  assert.strictEqual(rel.totalInterest, 300);
+  ok('settings.save', { interest_min_days: '0' }, T);
+  // a single piece weighed slightly lighter at the counter is still the whole piece
+  const ring = ok('stock.add', { items: [{ name: 'Tag ring', netWt: 4.25 }] }, T)[0];
+  ok('sale.create', { type: 'EST', customerId: c.id, lines: [{ itemId: ring.id, weight: 4.2, rate: 100 }], cash: 420 }, T);
+  assert.ok(!ok('stock.list', { q: 'tag ring' }, T).length);
+  // an advance to a karigar is allowed
+  ok('parties.entry', { partyId: k.id, type: 'pay_labour', cash: 500 }, T);
+  // employees do not see cost / profit
+  const E = ok('auth.login', { username: 'ravi', pin: '5678' }).token;
+  assert.strictEqual(ok('reports.daily', {}, E).profit, null);
+  assert.strictEqual(ok('reports.daily', {}, T).profit !== null, true);
+});
+
 test('archive finished year keeps bills searchable', () => {
   const t2 = g.createContext ? null : null; // archive needs a finished year; fake one bill in FY 25-26
   g.insert_('Sales', { id: 'S_OLD', billNo: 'EST/25-26/0009', type: 'EST', fy: '25-26', date: '2026-03-10',

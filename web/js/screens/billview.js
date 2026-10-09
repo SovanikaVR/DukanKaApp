@@ -3,6 +3,7 @@ import { call } from '../api.js';
 import { isOwner } from '../state.js';
 import { h, screen, field, busy, toast, inr, fdate, empty, go, confirmBox, seg } from '../ui.js';
 import { invoiceHtml, docActions, billText, docCss } from '../bill.js';
+import { t } from '../i18n.js';
 
 export async function render({ id }, query) {
   const b = await call('sale.get', { id, fy: query.fy || '' });
@@ -26,7 +27,12 @@ export async function render({ id }, query) {
   });
   const cancel = isOwner() && b.status !== 'void' ? h('button', { class: 'btn2 danger', onclick: async () => {
     if (!await confirmBox('Cancel this bill?', 'Stock items go back to stock and the money is reversed in the cash book. This cannot be undone.', 'Cancel bill')) return;
-    await busy(null, async () => { await call('sale.void', { id: b.id }); toast('Bill cancelled'); go('bill/' + b.id); });
+    await busy(null, async () => {
+      const r = await call('sale.void', { id: b.id });
+      go('bill/' + b.id);
+      if (r.returned) await confirmBox(t('Bill cancelled'), t('The customer had already paid baki on this bill. Give back') + ' ' + inr(r.returned) + ' ' + t('to the customer (written in the cash book).'), t('OK'));
+      else toast('Bill cancelled');
+    });
   } }, 'Cancel bill') : null;
   return screen(b.status === 'void' ? 'Cancelled bill' : 'Bill saved', (b.type === 'GST' ? 'Tax invoice ' : 'Estimate ') + b.billNo + ' · ' + fdate(b.date),
     [actions, h('div', { class: 'sec' }, 'PREVIEW'), sizeSeg, wrap, cancel],

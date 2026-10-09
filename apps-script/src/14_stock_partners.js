@@ -11,9 +11,18 @@ function stockAdd_(user, d) {
   var items = d.items || [];
   req_(items.length, 'Add at least one item');
   var saved = [];
+  var tags = {};
+  rows_('Items').forEach(function (i) { if (i.tag) tags[i.tag.toLowerCase()] = 1; });
+  // Check every row before saving any, so a mistake in one row never half-saves the others.
+  items.forEach(function (it) {
+    ['netWt', 'grossWt', 'pieces', 'makingPerG', 'costTotal', 'purityPct'].forEach(function (k) { pos_(it[k], k); });
+    req_(num_(it.purityPct) <= 100, 'Purity % should be 100 or less');
+    req_(round3_(it.netWt || it.grossWt) > 0, 'Enter the weight for ' + (it.name || 'the item'));
+    var tg = String(it.tag || '').trim().toLowerCase();
+    if (tg) { req_(!tags[tg], 'Tag ' + it.tag + ' is already used'); tags[tg] = 1; }
+  });
   items.forEach(function (it) {
     var net = round3_(it.netWt || it.grossWt);
-    req_(net > 0, 'Enter the weight for ' + (it.name || 'the item'));
     var tag = String(it.tag || '').trim();
     if (!tag) tag = 'T' + String(nextCounter_('tag')).padStart(5, '0');
     var rec = {
@@ -66,11 +75,9 @@ function stockSummary_() {
   var list = Object.keys(groups).map(function (k) { return groups[k]; });
   list.sort(function (a, b) { return b.netWt - a.netWt; });
   var today = today_();
-  var soldToday = rows_('Items').filter(function (i) {
-    if (i.status !== 'sold' || !i.soldBillId) return false;
-    var b = find_('Sales', i.soldBillId);
-    return b && b.date === today;
-  }).length;
+  var todayBills = {};
+  rows_('Sales').forEach(function (b) { if (b.date === today && b.status !== 'void') todayBills[b.id] = 1; });
+  var soldToday = rows_('Items').filter(function (i) { return i.soldBillId && todayBills[i.soldBillId]; }).length;
   return { categories: list, totals: totals, soldToday: soldToday,
     categoriesList: json_(settings_().item_categories, []) };
 }
@@ -84,8 +91,11 @@ function stockUpdate_(user, d) {
     if (d[k] !== undefined && d[k] !== '') patch[k] = pos_(d[k], k);
   });
   req_(i.status === 'in' || d.status, 'This item is already sold');
+  if (patch.pieces !== undefined) req_(patch.pieces >= 1, 'Pieces should be at least 1');
+  if (patch.purityPct !== undefined) req_(patch.purityPct <= 100, 'Purity % should be 100 or less');
   if (d.status) {
     req_(['in', 'removed'].indexOf(d.status) >= 0, 'Bad status');
+    req_(i.status !== 'sold', 'This item is sold. To bring it back, cancel its bill.');
     patch.status = d.status;
   }
   var saved = update_('Items', i.id, patch);
@@ -103,16 +113,20 @@ function fineEntry_(user, type, grams, value, refType, refId, notes, date) {
 }
 
 function meltCreate_(user, d) {
-  var ids = d.oldGoldIds || [];
+  var ids = (d.oldGoldIds || []).filter(function (x, i, a) { return a.indexOf(x) === i; });
   req_(ids.length, 'Pick the old gold items to melt');
-  var barWt = round3_(d.barWt), purity = num_(d.purityPct);
+  var barWt = round3_(pos_(d.barWt, 'Bar weight')), purity = pos_(d.purityPct, 'Purity');
   req_(barWt > 0 && purity > 0, 'Enter bar weight and tested purity');
+  req_(purity <= 100, 'Purity % should be 100 or less');
+  pos_(d.cost, 'Charge');
   var totalWt = 0, ourFine = 0, paidFine = 0, paidAmount = 0;
   ids.forEach(function (gid) {
     var g = find_('OldGold', gid);
     req_(g && g.status === 'stock', 'An item is not in old gold stock');
+    req_(g.metal !== 'silver', 'Silver cannot be melted into fine gold');
     totalWt += num_(g.weight); ourFine += num_(g.ourFine); paidFine += num_(g.customerFine); paidAmount += num_(g.amount);
   });
+  req_(barWt <= round3_(totalWt) + 0.0005, 'Bar weight (' + barWt + ' g) cannot be more than the old gold melted (' + round3_(totalWt) + ' g)');
   var actualFine = round3_(barWt * purity / 100);
   var cost = round2_(d.cost);
   var date = validDate_(d.date);
@@ -170,9 +184,18 @@ function fineSummary_() {
   };
 }
 
+function fineInHand_() {
+  return round3_(rows_('FineLedger').reduce(function (a, f) { return a + num_(f.grams); }, 0));
+}
+function needFine_(grams) {
+  var have = fineInHand_();
+  req_(grams <= have + 0.0005, 'Only ' + have + ' g fine gold in hand');
+}
+
 function issueFineToKarigar_(user, karigarId, grams, refType, refId, notes, date) {
   var p = find_('Parties', karigarId);
   req_(p && p.type === 'karigar', 'Karigar not found');
+  needFine_(grams);
   fineEntry_(user, 'karigar_out', -grams, 0, refType, refId, 'To ' + p.name + ': ' + notes, date);
   insert_('PartyLedger', {
     id: uid_('Y'), partyId: p.id, date: validDate_(date), type: 'issue_gold', goldG: round3_(grams), cash: 0,
@@ -207,7 +230,9 @@ function partySave_(user, d) {
     mobile: cleanMobile_(d.mobile), notes: String(d.notes || '') };
   if (d.id) {
     if (d.active !== undefined) rec.active = d.active ? 'true' : 'false';
-    return update_('Parties', d.id, rec);
+    var saved = update_('Parties', d.id, rec);
+    audit_(user, 'party.edit', d.id, rec);
+    return saved;
   }
   rec.id = uid_('Q'); rec.active = 'true'; rec.createdAt = nowIso_();
   insert_('Parties', rec);
@@ -255,6 +280,7 @@ function partyEntry_(user, d) {
       }
     } else if (d.type === 'pay_gold') {
       req_(g > 0, 'Enter grams given');
+      needFine_(g);
       e.goldG = -g;
       fineEntry_(user, 'wholesaler_out', -g, 0, 'party', p.id, 'To ' + p.name, date);
     } else if (d.type === 'pay_cash_rate') {
@@ -269,6 +295,7 @@ function partyEntry_(user, d) {
   } else {
     if (d.type === 'issue_gold') {
       req_(g > 0, 'Enter grams given');
+      needFine_(g);
       e.goldG = g;
       fineEntry_(user, 'karigar_out', -g, 0, 'party', p.id, 'To ' + p.name, date);
     } else if (d.type === 'return_gold') {
@@ -276,6 +303,7 @@ function partyEntry_(user, d) {
       e.goldG = -g;
       fineEntry_(user, 'karigar_return', g, 0, 'party', p.id, 'From ' + p.name, date);
     } else if (d.type === 'job_done') {
+      req_(g > 0 || c > 0, 'Enter the fine gold used or the labour');
       e.goldG = -g; e.cash = c;
       if (d.items && d.items.length) stockAdd_(user, { items: d.items, source: 'karigar', sourceId: e.id });
     } else if (d.type === 'pay_labour') {
@@ -286,7 +314,9 @@ function partyEntry_(user, d) {
   }
   insert_('PartyLedger', e);
   audit_(user, 'party.' + d.type, p.id, { goldG: e.goldG, cash: e.cash });
-  return partyLedger_(p.id);
+  var led = partyLedger_(p.id);
+  if (led.entries && led.entries.length > 60) led.entries = led.entries.slice(0, 60); // keep the reply small
+  return led;
 }
 
 /* ---------- Cash book ---------- */
@@ -295,15 +325,19 @@ function cashBalanceBefore_(date, mode) {
   var s = settings_();
   var openDate = s.cash_opening_date || '0000-00-00';
   var bal = mode === 'cash' ? num_(s.cash_opening) : 0;
+  // The opening amount is the drawer at the start of the opening date. Days before it are worked out backwards.
+  var back = date < openDate;
   rows_('Cash').forEach(function (c) {
-    if (c.mode !== mode || c.date < openDate || c.date >= date) return;
-    bal += c.dir === 'in' ? num_(c.amount) : -num_(c.amount);
+    if (c.mode !== mode) return;
+    var sign = c.dir === 'in' ? 1 : -1;
+    if (back) { if (c.date >= date && c.date < openDate) bal -= sign * num_(c.amount); }
+    else if (c.date >= openDate && c.date < date) bal += sign * num_(c.amount);
   });
   return round2_(bal);
 }
 
 function cashList_(d) {
-  var from = validDate_(d.from), to = d.to ? validDate_(d.to) : from;
+  var from = readDate_(d.from), to = d.to ? readDate_(d.to) : from;
   var entries = rows_('Cash').filter(function (c) { return c.date >= from && c.date <= to; }).map(function (c) {
     return { id: c.id, date: c.date, dir: c.dir, mode: c.mode, amount: num_(c.amount), category: c.category,
       refType: c.refType, notes: c.notes, by: c.by, at: c.at };
@@ -329,6 +363,8 @@ function cashAdd_(user, d) {
 }
 
 function cashOpening_(user, d) {
+  req_(d.amount !== '' && d.amount !== undefined && !isNaN(parseFloat(String(d.amount).replace(/,/g, ''))), 'Enter the cash in the drawer');
+  pos_(d.amount, 'Opening cash');
   setSetting_('cash_opening', String(round2_(d.amount)));
   setSetting_('cash_opening_date', validDate_(d.date));
   audit_(user, 'cash.opening', '', d);

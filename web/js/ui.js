@@ -1,5 +1,6 @@
 /* Small DOM helpers and shared form pieces (no framework, no build step). */
 import { t, getLang } from './i18n.js';
+import { useRid } from './api.js';
 
 // replaceChildren() that, like h(), skips null/false (so "cond ? el : null" never prints "null").
 if (typeof Element !== 'undefined' && !Element.prototype._dkPatched) {
@@ -47,6 +48,8 @@ export const $ = (sel, root = document) => root.querySelector(sel);
 /** Navigate to a screen, e.g. go('bill/S123'). Re-renders even when already there. */
 export function go(path, opts = {}) {
   const target = '#/' + path;
+  // The user left the screen while it was saving: stay where they are (the save itself is done).
+  if (saving && location.hash !== saveFrom) return;
   if (location.hash === target) window.dispatchEvent(new HashChangeEvent('hashchange'));
   // After a save, replace the form in history: the Back button then cannot reopen a filled form.
   else if (opts.replace || saving) location.replace(target);
@@ -55,7 +58,7 @@ export function go(path, opts = {}) {
 
 /* ---------- formatting ---------- */
 
-export const inr = (n, d = 0) => '₹' + Calc.inr(n, d);
+export const inr = (n, d = 0) => (parseFloat(n) < 0 && Math.abs(parseFloat(n)) >= (d ? 0.005 : 0.5) ? '−₹' + Calc.inr(-parseFloat(n), d) : '₹' + Calc.inr(Math.abs(parseFloat(n) || 0), d));
 export const num = (v) => {
   const n = parseFloat(String(v ?? '').replace(/,/g, ''));
   return isNaN(n) ? 0 : n;
@@ -85,6 +88,7 @@ export function toast(msg, kind = 'ok') {
 /* ---------- saving: one at a time, with a full-screen "Saving…" cover ---------- */
 
 let saving = false;
+let saveFrom = '';
 let cover = null;
 export function isSaving() { return saving; }
 
@@ -106,21 +110,39 @@ function hideCover() { if (cover) cover.remove(); }
 export async function busy(btn, fn, text) {
   if (saving) return undefined;
   saving = true;
+  saveFrom = location.hash;
+  // One request id per form: if the reply is lost and the user taps Save again, the shop saves it only once.
+  if (btn) { btn._rid = btn._rid || (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)); useRid(btn._rid); }
+  const slow = setTimeout(() => { if (cover) cover.querySelector('.cover-text').textContent = t('Internet is slow… still saving, please wait'); }, 12000);
   const label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = t('Please wait…'); }
   showCover(text);
-  try { return await fn(); }
-  catch (e) { toast(e.message || String(e), 'err'); return undefined; }
+  let ok = false;
+  try { const res = await fn(); ok = true; return res; }
+  catch (e) { toast(friendly(e), 'err'); return undefined; }
   finally {
+    clearTimeout(slow);
+    useRid(null);
+    if (ok && btn) btn._rid = null;
     saving = false;
     hideCover();
     if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = label; }
   }
 }
 
+/** Turns programming errors into a plain message; shop messages pass through. */
+export function friendly(e) {
+  const m = e && e.message ? e.message : String(e);
+  if (/undefined|null|is not a function|reading|Unexpected token|export named/i.test(m)) return t('Something went wrong. Please try again.');
+  return m;
+}
+
 export function modal(title, body, actions = []) {
   return new Promise((resolve) => {
-    const close = (v) => { wrap.remove(); resolve(v); };
+    // A dialog belongs to the screen it was opened on: going Back closes it.
+    const onNav = () => close(null);
+    window.addEventListener('hashchange', onNav);
+    const close = (v) => { window.removeEventListener('hashchange', onNav); wrap.remove(); resolve(v); };
     const wrap = h('div', { class: 'modal-wrap', onclick: (e) => { if (e.target === wrap) close(null); } },
       h('div', { class: 'modal', role: 'dialog', 'aria-label': title }, 
         h('div', { class: 'modal-title' }, title),
@@ -203,6 +225,7 @@ export function field(label, opts = {}) {
   const wrap = h('label', { class: 'f' + (opts.cls ? ' ' + opts.cls : '') }, h('span', { class: 'lbl' }, label), input,
     opts.hint ? h('span', { class: 'fhint' }, opts.hint) : null);
   if (opts.min0) input.addEventListener('input', () => { if (/-/.test(input.value)) input.value = input.value.replace(/-/g, ''); });
+  if (opts.max !== undefined) input.addEventListener('input', () => { if (num(input.value) > opts.max) input.value = String(opts.max); });
   wrap.input = input;
   return wrap;
 }

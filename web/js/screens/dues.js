@@ -6,6 +6,13 @@ import { t } from '../i18n.js';
 
 const FROM = { sale: 'Bill', order: 'Order', repair: 'Repair', loan: 'Girvi', payment: 'Paid', adjust: 'Adjusted', 'sale-cancel': 'Bill cancelled' };
 
+/** "Bill GST/26-27/0004", "Paid", "Written off: reason" — without repeating words or internal ids. */
+function noteOf(x) {
+  const n = String(x.notes || '').replace(/\s*\(C\w+\)/, '').trim();
+  if (['sale', 'order', 'repair', 'loan'].includes(x.refType) && n) return n;
+  return t(FROM[x.refType] || x.refType) + (n && n !== 'Received' ? ' · ' + n : '');
+}
+
 export async function render(params, query) {
   const d = await call('dues.list', { q: query.q || '' });
   const q = field(t('Search name or mobile'), { value: query.q || '' });
@@ -14,7 +21,7 @@ export async function render(params, query) {
   const rows = d.list.map((r) => {
     const open = h('div', { class: 'stack hidden' },
       r.items.map((x) => h('div', { class: 'kv small' },
-        h('span', { class: 'muted' }, fdate(x.date) + ' · ' + t(FROM[x.refType] || x.refType) + (x.notes ? ' · ' + x.notes : '')),
+        h('span', { class: 'muted' }, fdate(x.date) + ' · ' + noteOf(x)),
         h('span', { class: x.amount < 0 ? 'good' : '' }, (x.amount < 0 ? '− ' : '+ ') + inr(Math.abs(x.amount))))),
       h('div', { class: 'row-actions' },
         isViewer() ? null : h('button', { class: 'btn small', onclick: () => pay(r) }, t('Payment received')),

@@ -38,7 +38,7 @@ var ROUTES = {
   'customers.save': function (u, d) { return customerSave_(u, d); },
   'sale.create': function (u, d) { return saleCreate_(u, d); },
   'sale.list': function (u, d) { return saleList_(d); },
-  'sale.get': function (u, d) { return saleGet_(d.id, d.fy); },
+  'sale.get': function (u, d) { return hideCost_(u, saleGet_(d.id, d.fy)); },
   'sale.void': function (u, d) { return saleVoid_(u, d); },
   'sale.payUdhaar': function (u, d) { return salePayUdhaar_(u, d); },
   'oldgold.buy': function (u, d) { return oldGoldBuy_(u, d); },
@@ -58,11 +58,11 @@ var ROUTES = {
   'repairs.return': function (u, d) { return repairReturn_(u, d); },
   'repairs.deliver': function (u, d) { return repairDeliver_(u, d); },
   'stock.add': function (u, d) { return stockAdd_(u, d); },
-  'stock.list': function (u, d) { return stockList_(d); },
+  'stock.list': function (u, d) { return stockList_(d).map(function (i) { if (u.role !== 'owner') i.costTotal = null; return i; }); },
   'stock.summary': function () { return stockSummary_(); },
   'stock.update': function (u, d) { return stockUpdate_(u, d); },
   'melt.create': function (u, d) { return meltCreate_(u, d); },
-  'melt.list': function () { return meltList_(); },
+  'melt.list': function (u) { var m = meltList_(); if (u.role !== 'owner') m.forEach(function (x) { delete x.gain; delete x.gainValue; delete x.cost; delete x.paidAmount; }); return m; },
   'fine.summary': function () { return fineSummary_(); },
   'parties.list': function (u, d) { return partiesList_(d); },
   'parties.save': function (u, d) { return partySave_(u, d); },
@@ -71,8 +71,8 @@ var ROUTES = {
   'cash.list': function (u, d) { return cashList_(d); },
   'cash.add': function (u, d) { return cashAdd_(u, d); },
   'cash.opening': function (u, d) { return cashOpening_(u, d); },
-  'reports.daily': function (u, d) { return reportDaily_(d.date); },
-  'reports.month': function (u, d) { return reportMonth_(d.month); },
+  'reports.daily': function (u, d) { return hideProfit_(u, reportDaily_(d.date)); },
+  'reports.month': function (u, d) { return hideProfit_(u, reportMonth_(d.month)); },
   'reports.position': function () { return reportPosition_(); },
   'dues.list': function (u, d) { return duesList_(d); },
   'dues.pay': function (u, d) { return duesPay_(u, d); },
@@ -121,7 +121,8 @@ function handle_(action, token, data) {
     if (cache) {
       try {
         var str = JSON.stringify(result === undefined ? {} : result);
-        if (str.length < 90000) cache.put(rid, str, 21600);
+        // CacheService holds 100 KB (bytes; Hindi text is 3 bytes a letter). A big reply is remembered only as "saved".
+        cache.put(rid, str.length * 3 < 95000 ? str : '{"_saved":true}', 21600);
       } catch (e) { /* cache full or too large: skip */ }
     }
     return result;
@@ -142,4 +143,10 @@ function bootstrap_(user) {
     today: today_(),
     version: APP_VERSION
   };
+}
+
+function hideCost_(user, bill) {
+  if (user && user.role === 'owner') return bill;
+  (bill.lines || []).forEach(function (l) { delete l.cost; if (l.part) delete l.part.cost; });
+  return bill;
 }

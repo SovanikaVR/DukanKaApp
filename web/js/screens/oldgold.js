@@ -32,11 +32,14 @@ export async function render(params, query) {
       total: ['Paid', '₹' + Calc.inr(r.total)]
     }, size), { filename: 'old-gold-' + r.date + '.pdf', mobile: r.customer.mobile,
       text: `${r.shop.name}\nOld gold bought on ${fdate(r.date)}\n` + r.items.map((g) => `${g.item} ${g3(g.weight)} g → ₹${Calc.inr(g.amount)}`).join('\n') + `\nPaid: ₹${Calc.inr(r.total)}` }));
-    document.querySelector('#app .body').replaceChildren(content);
-    document.querySelector('#app .foot').replaceChildren(h('a', { class: 'btn2', href: '#/home' }, 'Done'));
+    // Show the receipt only if the user is still on this screen.
+    if (!view.isConnected) return;
+    view.querySelector('.body').replaceChildren(content);
+    view.querySelector('.foot').replaceChildren(h('a', { class: 'btn2', href: '#/home' }, 'Done'));
   }) }, 'Save & pay');
-  return screen(t('Buy Old Gold'), fdate(S.today) + (S.rate ? ' · 24K ' + inr(S.rate.g24) + '/g' : ''),
+  const view = screen(t('Buy Old Gold'), fdate(S.today) + (S.rate ? ' · 24K ' + inr(S.rate.g24) + '/g' : ''),
     [sec(t('Customer')), picker, sec('OLD ITEMS'), box,
       h('button', { class: 'add gold', type: 'button', onclick: add }, '+ Add another old item'), modeSeg],
     [h('div', { class: 'kv foot-total' }, h('span', { class: 'muted' }, t('Pay to customer')), totalEl), save]);
+  return view;
 }

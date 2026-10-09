@@ -1,7 +1,7 @@
 /* DukanKaApp — router and app shell. */
 import { apiUrl, token, onSessionExpired } from './api.js';
-import { S, refresh, modOn, isOwner, loadCached, clearCached } from './state.js';
-import { h, icon, toast, loading, go } from './ui.js';
+import { S, refresh, modOn, isOwner, isViewer, loadCached, clearCached } from './state.js';
+import { h, icon, toast, loading, go, todayStr, friendly, isSaving } from './ui.js';
 import { t, setLang, getLang } from './i18n.js';
 
 const app = document.getElementById('app');
@@ -58,6 +58,7 @@ function match(path) {
 
 let renderSeq = 0;
 async function render() {
+  if (window._dkUpdate && !isSaving()) { window._dkUpdate = false; location.reload(); return; }
   const seq = ++renderSeq;
   const raw = location.hash.replace(/^#\/?/, '') || 'home';
   const [path, qs] = raw.split('?');
@@ -65,9 +66,14 @@ async function render() {
   if (!apiUrl() && path !== 'connect') return go('connect');
   if (apiUrl() && !token() && path !== 'login' && path !== 'connect') return go('login');
   if (token() && !S.user && path !== 'login' && path !== 'connect') {
-    if (loadCached()) {
-      // Open at once with the saved copy; fresh settings and rate arrive in the background.
-      refresh().then(() => { if (path === 'home' && seq === renderSeq) render(); }).catch((e) => toast(e.message, 'err'));
+    if (loadCached(todayStr())) {
+      // Open at once with today's saved copy; fresh settings and rate arrive in the background.
+      const before = JSON.stringify(S.rate);
+      // A new-entry screen just opened with an older rate: open it again with the fresh rate.
+      const FORMS = ['home', 'sale', 'loan-new', 'order-new', 'oldgold', 'rate'];
+      const bg = (again) => refresh().then(() => { if (FORMS.includes(path) && seq === renderSeq && (path === 'home' || JSON.stringify(S.rate) !== before)) render(); })
+        .catch(() => { if (again && token()) setTimeout(() => bg(false), 8000); });
+      bg(true);
     } else {
       app.replaceChildren(loading());
       try { await refresh(); } catch (e) {
@@ -77,7 +83,14 @@ async function render() {
       }
     }
   }
-  const m = match(path) || match('home');
+  const m = match(path);
+  if (!m) return go('home', { replace: true });
+  const blocked = blockedReason(m.name, m.params);
+  if (blocked) {
+    app.replaceChildren(shell(h('div', { class: 'screen' }, h('main', { class: 'body' },
+      h('div', { class: 'error-box' }, t(blocked)), h('a', { class: 'btn', href: '#/home' }, t('Home')))), m.name));
+    return;
+  }
   currentParams = m.params;
   app.replaceChildren(shell(loading(), m.name));
   try {
@@ -95,9 +108,34 @@ async function render() {
 }
 
 /** Something failed while opening a screen: say it simply and offer Try again. */
+const MODULE_OF = {
+  sale: 'sale', bills: 'sale', 'bill/:id': 'sale', oldgold: 'oldgold', loans: 'girvi', 'loan-new': 'girvi', 'loan/:id': 'girvi',
+  orders: 'orders', 'order-new': 'orders', 'order/:id': 'orders', repairs: 'repair', 'repair-new': 'repair', 'repair/:id': 'repair',
+  stock: 'stock', 'stock-add': 'stock', melt: 'melt', cash: 'cash', reports: 'reports'
+};
+const WRITE_ONLY = { sale: 1, oldgold: 1, 'stock-add': 1, 'loan-new': 1, 'order-new': 1, 'repair-new': 1, 'customer-edit/:id': 1 };
+function blockedReason(name, params) {
+  if (!S.user) return '';
+  let mod = MODULE_OF[name];
+  if (name === 'parties/:type') {
+    if (params.type !== 'wholesaler' && params.type !== 'karigar') return 'Page not found';
+    mod = params.type;
+  }
+  if (mod && !modOn(mod)) return 'This part of the app is switched off in Settings.';
+  if (isViewer() && WRITE_ONLY[name]) return 'View-only login: you can see records but not add new ones.';
+  return '';
+}
+
+/** Something failed while opening a screen: say it simply and offer Try again. */
 function showError(e, name) {
   console.error(e);
   let msg = e && e.message ? e.message : String(e);
+  // The app was just updated and this page still has the old version: load the new one.
+  if (/does not provide an export|Failed to fetch dynamically imported module|error loading dynamically imported/i.test(msg) && !sessionStorage.getItem('dk_reloaded')) {
+    try { sessionStorage.setItem('dk_reloaded', '1'); } catch (x) { /* ignore */ }
+    location.reload();
+    return;
+  }
   if (/undefined|null|is not a function|reading/i.test(msg)) msg = 'Could not open this screen. Please try again.';
   if (/Failed to fetch|dynamically imported module|Importing a module/i.test(msg)) msg = 'No internet, or the app was just updated. Please try again.';
   const view = h('div', { class: 'screen' }, h('main', { class: 'body' },
@@ -109,7 +147,7 @@ function showError(e, name) {
 
 window.addEventListener('unhandledrejection', (ev) => {
   const m = ev.reason && ev.reason.message ? ev.reason.message : '';
-  if (m) toast(/undefined|reading/.test(m) ? 'Something went wrong. Please try again.' : m, 'err');
+  if (m) toast(friendly(ev.reason), 'err');
 });
 
 const ACTIVE = {
@@ -118,9 +156,10 @@ const ACTIVE = {
   'customer/:id': 'home', 'customer-edit/:id': 'home', 'help/:topic': 'help'
 };
 let currentParams = {};
+
 function activeOf(name) {
   if (name === 'parties/:type') return 'parties/' + currentParams.type;
-  if (name === 'party/:id') return '';
+  if (name === 'party/:id') return window._dkPartyType ? 'parties/' + window._dkPartyType : '';
   return ACTIVE[name] || name;
 }
 
@@ -169,7 +208,17 @@ document.addEventListener('dk-lang', () => render());
 setLang(getLang());
 render();
 
+// The date changed while the app stayed open (overnight): load today's rate and date again.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && S.user && S.today && S.today !== todayStr()) refresh().then(render).catch(() => {});
+});
+
 if ('serviceWorker' in navigator) {
+  // A new version took over: reload once so every screen comes from the same version.
+  const hadController = !!navigator.serviceWorker.controller;
+  // Not at once (a form may be half filled): the new version loads on the next screen change.
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) window._dkUpdate = true; });
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
 }
+window.addEventListener('load', () => setTimeout(() => { try { sessionStorage.removeItem('dk_reloaded'); } catch (x) { /* ignore */ } }, 10000));
 void isOwner;

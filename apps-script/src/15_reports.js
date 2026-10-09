@@ -1,7 +1,7 @@
 /* ---------- Reports ---------- */
 
 function reportDaily_(date) {
-  date = validDate_(date);
+  date = readDate_(date);
   var rate = rateOn_(date) || { g24: 0 };
   var sales = rows_('Sales').filter(function (b) { return b.date === date && b.status !== 'void'; });
   var salesTotal = 0, salesProfit = 0, taxTotal = 0, unknownCostLines = 0;
@@ -19,12 +19,17 @@ function reportDaily_(date) {
     interest += num_(t.interestPart);
     if (t.type === 'close') loansClosed++;
   });
-  var newLoans = rows_('Loans').filter(function (l) { return l.date === date; });
+  var newLoans = rows_('Loans').filter(function (l) { return l.date === date && l.status !== 'void'; });
   var repairs = rows_('Repairs').filter(function (r) { return r.deliveredAt === date; });
   var repairProfit = repairs.reduce(function (a, r) { return a + num_(r.custCharge) - num_(r.karigarCost); }, 0);
-  var delivered = rows_('Orders').filter(function (o) { return o.deliveredAt === date; });
+  var delivered = rows_('Orders').filter(function (o) { return o.deliveredAt === date && o.status === 'delivered'; });
+  // Making profit = making charged to the customer − labour actually booked to the karigar for that order.
+  var labourOf = {};
+  rows_('PartyLedger').forEach(function (e) {
+    if (e.refType === 'order' && e.type === 'job_done') labourOf[e.refId] = (labourOf[e.refId] || 0) + num_(e.cash);
+  });
   var makingProfit = delivered.reduce(function (a, o) {
-    return a + (num_(o.makingPerG) - num_(o.karigarPerG)) * num_(o.finalWt);
+    return a + num_(o.makingPerG) * num_(o.finalWt) - (labourOf[o.id] || 0);
   }, 0);
   var melts = rows_('Melts').filter(function (m) { return m.date === date; });
   var meltGain = melts.reduce(function (a, m) {
@@ -33,23 +38,27 @@ function reportDaily_(date) {
   var cashEntries = rows_('Cash').filter(function (c) { return c.date === date; });
   var expenses = cashEntries.filter(function (c) { return c.dir === 'out' && c.category === 'expense'; })
     .reduce(function (a, c) { return a + num_(c.amount); }, 0);
+  var otherIncome = cashEntries.filter(function (c) { return c.dir === 'in' && c.category === 'other-income'; })
+    .reduce(function (a, c) { return a + num_(c.amount); }, 0);
   var oldBought = rows_('OldGold').filter(function (g) { return g.date === date && g.status !== 'void'; });
-  var booked = rows_('Orders').filter(function (o) { return o.date === date; });
+  var booked = rows_('Orders').filter(function (o) { return o.date === date && o.status !== 'cancelled'; });
   var cash = cashList_({ from: date, to: date });
-  var profit = salesProfit + interest + repairProfit + makingProfit + meltGain - expenses;
+  var profit = salesProfit + interest + repairProfit + makingProfit + meltGain + otherIncome - expenses;
   return {
     date: date,
     profit: Math.round(profit),
     parts: {
       sales: Math.round(salesProfit), interest: Math.round(interest), repair: Math.round(repairProfit),
-      making: Math.round(makingProfit), melting: Math.round(meltGain), expenses: Math.round(expenses)
+      making: Math.round(makingProfit), melting: Math.round(meltGain), other: Math.round(otherIncome), expenses: Math.round(expenses)
     },
     unknownCostLines: unknownCostLines,
     sales: { count: sales.length, total: Math.round(salesTotal), tax: round2_(taxTotal),
       gst: sales.filter(function (b) { return b.type === 'GST'; }).length },
     loans: { newCount: newLoans.length, newAmount: Math.round(newLoans.reduce(function (a, l) { return a + num_(l.principal); }, 0)),
       closed: loansClosed },
-    oldGold: { count: oldBought.length, weight: round3_(oldBought.reduce(function (a, g) { return a + num_(g.weight); }, 0)),
+    oldGold: { count: oldBought.length,
+      weight: round3_(oldBought.filter(function (g) { return g.metal !== 'silver'; }).reduce(function (a, g) { return a + num_(g.weight); }, 0)),
+      silverWeight: round3_(oldBought.filter(function (g) { return g.metal === 'silver'; }).reduce(function (a, g) { return a + num_(g.weight); }, 0)),
       amount: Math.round(oldBought.reduce(function (a, g) { return a + num_(g.amount); }, 0)) },
     orders: { booked: booked.length, delivered: delivered.length },
     repairs: { delivered: repairs.length },
@@ -64,7 +73,7 @@ function reportMonth_(month) {
   var days = new Date(y, m, 0).getDate();
   var t = today_();
   var out = [], total = 0;
-  var parts = { sales: 0, interest: 0, repair: 0, making: 0, melting: 0, expenses: 0 };
+  var parts = { sales: 0, interest: 0, repair: 0, making: 0, melting: 0, other: 0, expenses: 0 };
   for (var d = 1; d <= days; d++) {
     var date = month + '-' + String(d).padStart(2, '0');
     if (date > t) break;
@@ -142,7 +151,7 @@ function reportHtml_(date) {
     '<h3 style="margin:12px 0 4px">Profit today: ' + r(d.profit) + '</h3><table>' +
     row('Sales (' + d.sales.count + ' bills)', r(d.parts.sales)) + row('Girvi interest received', r(d.parts.interest)) +
     row('Repair profit', r(d.parts.repair)) + row('Order making profit', r(d.parts.making)) +
-    row('Melting gain', r(d.parts.melting)) + row('Expenses', '− ' + r(d.parts.expenses)) + '</table>' +
+    row('Melting gain', r(d.parts.melting)) + row('Other income', r(d.parts.other)) + row('Expenses', '− ' + r(d.parts.expenses)) + '</table>' +
     '<h3 style="margin:16px 0 4px">Cash</h3><table>' +
     row('Opening', r(d.cash.opening)) + row('In', r(d.cash.cashIn)) + row('Out', r(d.cash.cashOut)) +
     row('Should be in drawer', r(d.cash.closing)) + row('UPI in / out', r(d.cash.upiIn) + ' / ' + r(d.cash.upiOut)) + '</table>' +
@@ -155,4 +164,12 @@ function reportHtml_(date) {
     row('Old gold not melted', Calc.inr(p.fine.oldGold.weight, 3) + ' g') +
     row('Fine gold in hand', Calc.inr(p.fine.inHand, 3) + ' g') +
     row('Gold with karigars', Calc.inr(p.karigars.goldG, 3) + ' g') + '</table></div>';
+}
+
+/** Purchase cost and profit are for the owner only. */
+function hideProfit_(user, rep) {
+  if (user && user.role === 'owner') return rep;
+  rep.profit = null; rep.parts = null; rep.unknownCostLines = 0;
+  if (rep.days) rep.days.forEach(function (d) { d.profit = null; });
+  return rep;
 }

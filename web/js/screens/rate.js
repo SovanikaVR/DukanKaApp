@@ -11,7 +11,10 @@ export async function render() {
   const g18 = field('18K', { type: 'num', value: r.g18 || '' });
   const ag = field('Fine silver', { type: 'num', value: r.silver || '' });
   g24.input.setAttribute('autofocus', '');
-  let touched22 = false, touched18 = false;
+  // A 22K / 18K rate the shop set by hand today is kept when 24K is changed.
+  const auto = (p) => Math.round(num(r.g24) * num(p) / 100);
+  let touched22 = !!(r.isToday && r.g22 && num(r.g22) !== auto(setting('purity_22k', '91.6')));
+  let touched18 = !!(r.isToday && r.g18 && num(r.g18) !== auto(setting('purity_18k', '75')));
   g22.input.addEventListener('input', () => { touched22 = true; });
   g18.input.addEventListener('input', () => { touched18 = true; });
   g24.input.addEventListener('input', () => {
@@ -31,7 +34,7 @@ export async function render() {
   }).catch(() => history.replaceChildren());
 
   return screen(t("Today's rate"), fdate(S.today) + ' · used for all bills today', [
-    r.g24 && !r.isToday ? h('button', { class: 'btn2', onclick: () => busy(save, async () => {
+    r.g24 && !r.isToday && !isViewer() ? h('button', { class: 'btn2', onclick: () => busy(null, async () => {
       S.rate = await call('rates.save', { g24: r.g24, g22: r.g22, g18: r.g18, silver: r.silver });
       toast('Same rate as ' + fdate(r.date) + ' saved for today');
       go('home');

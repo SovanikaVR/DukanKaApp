@@ -19,7 +19,7 @@ function invoiceA4(b) {
     ${gst ? `<td>${esc(shop.hsn || '7113')}</td><td>${esc(l.huid || '')}</td>` : ''}
     <td class="n">${g3(l.weight)} g</td><td class="n">${m2(l.rate)}</td><td class="n">${m2(l.metalValue)}</td><td class="n">${m2(l.making)}</td><td class="n">${m2(l.amount)}</td></tr>`).join('');
   const olds = b.oldGold.map((g) => `<div class="kv"><span>Less: old ${esc(g.metal)} — ${esc(g.item)} ${g3(g.weight)} g, cut ${esc(g.cutPct)}%, fine ${g3(g.customerFine)} g × ${m0(g.rate)}</span><span>−${m2(g.amount)}</span></div>`).join('');
-  const half = b.tax / 2;
+  const half = Math.round(b.tax / 2 * 100) / 100; // CGST; SGST = tax − CGST so the two always add up
   return `<div class="doc a4">
   <div class="hd"><div><div class="shop">${esc(shop.name)}</div>
     <div class="muted">${esc(shop.address || '')}</div>
@@ -50,7 +50,7 @@ function invoiceThermal(b, mm) {
   const shop = b.shop || {};
   const cust = b.customer || { name: b.customerName, mobile: b.mobile, village: b.village };
   const r = (a, v, cls) => `<div class="r ${cls || ''}"><span>${a}</span><span>${v}</span></div>`;
-  const half = b.tax / 2;
+  const half = Math.round(b.tax / 2 * 100) / 100; // CGST; SGST = tax − CGST so the two always add up
   return `<div class="doc th th${mm}">
   <div class="c b big">${esc(shop.name)}</div>
   ${shop.address ? `<div class="c">${esc(shop.address)}</div>` : ''}${shop.mobile ? `<div class="c">Ph: ${esc(shop.mobile)}</div>` : ''}
@@ -209,6 +209,7 @@ export function billText(b) {
   const shop = (b.shop && b.shop.name) || '';
   const lines = b.lines.map((l) => `${l.name} ${g3(l.weight)} g — ₹${m0(l.amount)}`).join('\n');
   const old = b.oldGold.length ? `\nLess old gold: −₹${m0(b.oldValue)}` : '';
+  if (b.status === 'void') return `${shop}\n${b.type === 'GST' ? 'Tax invoice' : 'Estimate'} ${b.billNo} · ${fdate(b.date)}\nThis bill is CANCELLED.`;
   return `${shop}\n${b.type === 'GST' ? 'Tax invoice' : 'Estimate'} ${b.billNo} · ${fdate(b.date)}\n${lines}${b.tax ? `\nGST: ₹${m2(b.tax)}` : ''}${old}\n${b.net >= 0 ? 'Total' : 'Paid to you'}: ₹${m0(Math.abs(b.net))}${b.udhaar ? `\nBalance due: ₹${m0(b.udhaar)}` : ''}\nThank you!`;
 }
 

@@ -118,19 +118,30 @@ function archiveFy_(user, fy) {
   var all = rows_('Sales');
   var move = all.filter(function (r) { return r.fy === fy; });
   req_(move.length, 'No bills for ' + fy);
-  var arch = SpreadsheetApp.create(ss_().getName() + ' — bills FY ' + fy);
-  var ash = arch.getSheets()[0];
-  ash.setName('Sales');
-  ash.getRange('A:' + colLetter_(headers.length)).setNumberFormat('@');
-  var data = [headers].concat(move.map(function (r) { return headers.map(function (h) { return r[h]; }); }));
-  ash.getRange(1, 1, data.length, headers.length).setValues(data);
+  var oldId = settings_()['archive_' + fy];
+  var arch, ash;
+  if (oldId) {
+    // Archived before (a late bill was added for that year): add to the same file.
+    arch = SpreadsheetApp.openById(oldId);
+    ash = arch.getSheetByName('Sales');
+  } else {
+    arch = SpreadsheetApp.create(ss_().getName() + ' — bills FY ' + fy);
+    ash = arch.getSheets()[0];
+    ash.setName('Sales');
+    ash.getRange('A:' + colLetter_(headers.length)).setNumberFormat('@');
+    ash.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
+  var rowsOut = move.map(function (r) { return headers.map(function (h) { return toCell_(r[h]); }); });
+  ash.getRange(Math.max(ash.getLastRow(), 1) + 1, 1, rowsOut.length, headers.length).setValues(rowsOut);
   var keep = all.filter(function (r) { return r.fy !== fy; }).map(function (r) {
-    return headers.map(function (h) { return r[h]; });
+    return headers.map(function (h) { return toCell_(r[h]); });
   });
-  sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), headers.length).clearContent();
+  // Write the kept bills first, then clear what is left below: nothing is lost if the script stops half way.
+  var last = sh.getLastRow();
   if (keep.length) sh.getRange(2, 1, keep.length, headers.length).setValues(keep);
+  if (last > keep.length + 1) sh.getRange(keep.length + 2, 1, last - keep.length - 1, headers.length).clearContent();
   delete _rowsCache.Sales;
-  setSetting_('archive_' + fy, arch.getId());
+  if (!oldId) setSetting_('archive_' + fy, arch.getId());
   audit_(user, 'archive', fy, { bills: move.length, file: arch.getId() });
   return { moved: move.length, fileUrl: arch.getUrl() };
 }

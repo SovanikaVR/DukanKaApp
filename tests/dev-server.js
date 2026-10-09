@@ -22,10 +22,13 @@ const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
-      g._rowsCache = {};
-      const out = g.doPost({ postData: { contents: body } });
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(out.text);
+      // DELAY=3000 makes every API answer slow, like a weak mobile network or a cold Apps Script.
+      setTimeout(() => {
+        g._rowsCache = {};
+        const out = g.doPost({ postData: { contents: body } });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(out.text);
+      }, +(process.env.DELAY || 0));
     });
     return;
   }

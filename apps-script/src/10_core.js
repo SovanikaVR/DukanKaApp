@@ -3,6 +3,9 @@
 function settingsSave_(user, d) {
   var allowed = Object.keys(DEFAULT_SETTINGS);
   var changed = {};
+  var NUM = { gst_default_pct: [0, 28], making_default_per_g: [0, 1e6], standard_cut_pct: [0, 100], standard_purity_pct: [0, 100],
+    interest_default_rate: [0, 100], interest_min_days: [0, 365], purity_24k: [1, 100], purity_22k: [1, 100], purity_18k: [1, 100] };
+  // Check every value first, then save: a mistake in one box must not half-save the rest.
   Object.keys(d || {}).forEach(function (k) {
     if (allowed.indexOf(k) < 0) return;
     var v = d[k];
@@ -11,11 +14,16 @@ function settingsSave_(user, d) {
     if (k.indexOf('formula_') === 0) testFormula_(k, v);
     if (k === 'shop_gstin' && v) {
       v = v.trim().toUpperCase();
-      req_(/^[0-9]{2}[A-Z0-9]{13}$/.test(v), 'GSTIN should be 15 characters, starting with the 2-digit state code');
+      req_(/^[0-3][0-9][A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(v), 'GSTIN is not valid (15 characters, like 27ABCDE1234F1Z5)');
     }
-    setSetting_(k, v);
+    if (NUM[k]) {
+      var n = parseFloat(String(v).replace(/,/g, ''));
+      req_(!isNaN(n) && n >= NUM[k][0] && n <= NUM[k][1], 'Check the value of ' + k.replace(/_/g, ' ') + ' (' + NUM[k][0] + ' to ' + NUM[k][1] + ')');
+      v = String(n);
+    }
     changed[k] = v;
   });
+  Object.keys(changed).forEach(function (k) { setSetting_(k, changed[k]); });
   audit_(user, 'settings.save', '', changed);
   return settings_();
 }
@@ -106,8 +114,12 @@ function customerSave_(user, d) {
     return saved;
   }
   if (mobile) {
-    var dup = rows_('Customers').filter(function (c) { return c.mobile === mobile; })[0];
-    if (dup && dup.firstName.toLowerCase() === first.toLowerCase()) return dup;
+    // Same person typed again (same mobile, first name and surname/blank): reuse instead of making a copy.
+    var dup = rows_('Customers').filter(function (c) {
+      return c.mobile === mobile && c.firstName.toLowerCase() === first.toLowerCase() &&
+        (!rec.lastName || !c.lastName || c.lastName.toLowerCase() === rec.lastName.toLowerCase());
+    })[0];
+    if (dup) return dup;
   }
   rec.id = uid_('K');
   rec.createdAt = nowIso_();
@@ -129,9 +141,11 @@ function ensureCustomer_(user, d) {
 }
 
 function customersSearch_(d) {
-  var q = String(d.q || '').trim().toLowerCase();
+  var q = String(d.q || '').trim().toLowerCase().replace(/\s+/g, ' ');
   var village = String(d.village || '').trim().toLowerCase();
   var digits = q.replace(/\D/g, '');
+  if (digits.length > 10 && /^(91|0)/.test(digits)) digits = digits.slice(-10);
+  var words = q.split(' ');
   var list = rows_('Customers');
   var scored = [];
   list.forEach(function (c) {
@@ -141,7 +155,8 @@ function customersSearch_(d) {
     if (!q) { score = 1; }
     else if (fn.indexOf(q) === 0) { score = 5; matched = 'name'; }
     else if (ln.indexOf(q) === 0) { score = 4; matched = 'surname'; }
-    else if ((fn + ' ' + ln).indexOf(q) >= 0) { score = 3; matched = 'name'; }
+    else if ((fn + ' ' + ln).indexOf(q) >= 0 || (ln + ' ' + fn).indexOf(q) >= 0) { score = 3; matched = 'name'; }
+    else if (words.length > 1 && words.every(function (w) { return (fn + ' ' + ln + ' ' + c.village.toLowerCase()).indexOf(w) >= 0; })) { score = 3; matched = 'name'; }
     else if (digits.length >= 3 && c.mobile.indexOf(digits) >= 0) { score = 2; matched = 'mobile'; }
     else if (c.village.toLowerCase().indexOf(q) === 0) { score = 1; matched = 'village'; }
     if (score) scored.push({ c: c, s: score, m: matched });
@@ -201,6 +216,8 @@ function customerGet_(id) {
   return {
     customer: c, name: customerName_(c), loans: loans, orders: orders, repairs: repairs, sales: sales,
     oldGold: oldGold, girviDue: Math.round(girviDue), orderAdvance: Math.round(advance),
-    udhaar: customerUdhaar_(id)
+    udhaar: customerUdhaar_(id),
+    dues: rows_('Dues').filter(function (x) { return x.customerId === id; }).slice(-20)
+      .map(function (x) { return { date: x.date, amount: num_(x.amount), refType: x.refType }; })
   };
 }

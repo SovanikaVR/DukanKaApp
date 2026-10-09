@@ -1,7 +1,7 @@
 /* Wholesaler and karigar accounts: gold (fine grams) and cash, both ways. */
 import { call } from '../api.js';
-import { S, purityFor, isViewer } from '../state.js';
-import { h, screen, busy, toast, inr, fdate, g3, go, empty, ask, num } from '../ui.js';
+import { S, purityFor, isViewer, list as settingList } from '../state.js';
+import { h, screen, busy, toast, inr, fdate, g3, go, empty, ask, num, confirmBox } from '../ui.js';
 import { t } from '../i18n.js';
 
 const ENTRY_LABEL = {
@@ -32,11 +32,13 @@ export async function list({ type }) {
 export async function view({ id }) {
   const d = await call('parties.ledger', { id });
   const p = d.party;
+  window._dkPartyType = p.type;
   const isW = p.type === 'wholesaler';
   const rate24 = S.rate ? S.rate.g24 : '';
-  const entry = (type, fields, extra) => async () => {
+  const entry = (type, fields, extra, confirmText) => async () => {
     const v = await ask(ENTRY_LABEL[type], fields.concat([{ key: 'date', label: t('Date'), type: 'date', value: S.today }, { key: 'notes', label: 'Note', value: '' }]));
     if (!v) return;
+    if (confirmText && !await confirmBox(ENTRY_LABEL[type], confirmText(v))) return;
     await busy(null, async () => {
       await call('parties.entry', Object.assign({ partyId: id, type }, extra ? extra(v) : {}, v));
       toast('Saved');
@@ -51,11 +53,13 @@ export async function view({ id }) {
       { key: 'cash', label: 'Labour / cash to pay (₹)', type: 'num', value: '' },
       { key: 'addStock', label: 'Add to stock now?', options: [{ value: 'yes', label: 'Yes, as one lot' }, { value: 'no', label: 'No, I will add items' }], value: 'yes' },
       { key: 'name', label: 'Item / lot name', value: '' },
+      { key: 'category', label: 'Category', value: (settingList('item_categories')[0] || 'Other') },
+      { key: 'karat', label: t('Purity %'), options: [{ value: '22K', label: '22K' }, { value: '18K', label: '18K' }, { value: '24K', label: '24K' }], value: '22K' },
       { key: 'date', label: t('Date'), type: 'date', value: S.today }]);
     if (!v) return;
     await busy(null, async () => {
-      const items = v.addStock === 'yes' && num(v.grossWt) > 0 ? [{ name: v.name || 'Lot from ' + p.name, category: v.name || 'Other', metal: 'gold',
-        purityPct: purityFor('22K'), grossWt: v.grossWt, netWt: v.grossWt, costTotal: num(v.goldG) * num(rate24) + num(v.cash) }] : [];
+      const items = v.addStock === 'yes' && num(v.grossWt) > 0 ? [{ name: v.name || 'Lot from ' + p.name, category: (v.category || '').trim() || 'Other', metal: 'gold',
+        purityPct: purityFor(v.karat || '22K'), grossWt: v.grossWt, netWt: v.grossWt, costTotal: num(v.goldG) * num(rate24) + num(v.cash) }] : [];
       await call('parties.entry', { partyId: id, type: 'purchase', goldG: v.goldG, cash: v.cash, date: v.date, items, notes: g3(v.grossWt) + ' g goods' + (v.name ? ' · ' + v.name : '') });
       toast('Saved');
       go('party/' + id);
@@ -64,7 +68,7 @@ export async function view({ id }) {
   const buttons = isW ? [
     h('button', { class: 'btn2 small', onclick: purchase }, 'Bought goods'),
     h('button', { class: 'btn2 small', onclick: entry('pay_gold', [{ key: 'goldG', label: 'Fine gold given (g)', type: 'num', value: '' }]) }, 'Give fine gold'),
-    h('button', { class: 'btn2 small', onclick: entry('pay_cash_rate', [{ key: 'goldG', label: 'Grams settled', type: 'num', value: '' }, { key: 'rate', label: 'Rate ₹/g', type: 'num', value: String(rate24) }, mode]) }, 'Pay cash (rate cut)'),
+    h('button', { class: 'btn2 small', onclick: entry('pay_cash_rate', [{ key: 'goldG', label: t('Grams settled') + ' · ' + t('owed') + ' ' + g3(d.goldG) + ' g', type: 'num', value: '' }, { key: 'rate', label: 'Rate ₹/g', type: 'num', value: String(rate24) }, mode], null, (v) => t('Cash to pay') + ': ' + inr(num(v.goldG) * num(v.rate)) + '. ' + t('OK?')) }, 'Pay cash (rate cut)'),
     h('button', { class: 'btn2 small', onclick: entry('pay_cash', [{ key: 'cash', label: 'Amount (₹)', type: 'num', value: '' }, mode]) }, 'Pay cash dues')
   ] : [
     h('button', { class: 'btn2 small', onclick: entry('issue_gold', [{ key: 'goldG', label: 'Fine gold given (g)', type: 'num', value: '' }]) }, 'Give gold'),

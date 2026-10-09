@@ -57,7 +57,9 @@ function rows_(name) {
       for (var j = 0; j < headers.length; j++) {
         var v = vals[i][j];
         if (v instanceof Date) v = Utilities.formatDate(v, tz_(), 'yyyy-MM-dd');
-        o[headers[j]] = v === null || v === undefined ? '' : String(v);
+        v = v === null || v === undefined ? '' : String(v);
+        if (v.charAt(0) === "'" && v.charAt(1) === '=') v = v.slice(1);
+        o[headers[j]] = v;
       }
       out.push(o);
     }
@@ -72,7 +74,9 @@ function toCell_(v) {
   if (v === null || v === undefined) return '';
   if (typeof v === 'object') return JSON.stringify(v);
   if (typeof v === 'boolean') return v ? 'true' : 'false';
-  return String(v);
+  v = String(v);
+  // Text typed by a user that starts with "=" must never become a Google Sheets formula.
+  return v.charAt(0) === '=' ? "'" + v : v;
 }
 
 /** Appends one record. Missing fields become blank. Returns the record. */
@@ -149,8 +153,27 @@ function fyOf_(dateStr) {
   return String(start % 100).padStart(2, '0') + '-' + String((start + 1) % 100).padStart(2, '0');
 }
 
+/** Date used only to look things up (future allowed): a bad value means today. */
+function readDate_(s) {
+  try { return s && String(s) > today_() && /^\d{4}-\d{2}-\d{2}$/.test(String(s)) ? (validDateAny_(String(s)) ? String(s) : today_()) : validDate_(s); }
+  catch (e) { return today_(); }
+}
+function validDateAny_(s) {
+  var p = s.split('-').map(Number);
+  var dt = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+  return dt.getUTCFullYear() === p[0] && dt.getUTCMonth() === p[1] - 1 && dt.getUTCDate() === p[2];
+}
+
+/** Entry date from the app: blank = today. A wrong or future date is refused. */
 function validDate_(s) {
-  return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : today_();
+  if (s === undefined || s === null || s === '') return today_();
+  s = String(s);
+  req_(/^\d{4}-\d{2}-\d{2}$/.test(s), 'Date is not valid');
+  var p = s.split('-').map(Number);
+  var dt = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+  req_(dt.getUTCFullYear() === p[0] && dt.getUTCMonth() === p[1] - 1 && dt.getUTCDate() === p[2], 'Date is not valid: ' + s);
+  req_(s <= today_(), 'Date cannot be in the future');
+  return s;
 }
 
 function req_(cond, msg) { if (!cond) throw new Error(msg); }

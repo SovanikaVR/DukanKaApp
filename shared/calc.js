@@ -194,13 +194,28 @@ var Calc = (function () {
     var events = (txns || []).slice().sort(function (a, b) {
       return parseD(a.date) - parseD(b.date);
     });
+    var minDays = parseFloat(loan.minDays !== undefined && loan.minDays !== '' ? loan.minDays : opts.minDays) || 0;
+    if (opts.noMinimum) minDays = 0;
+    var minDone = false;
+    var lent = P; // amount lent, with top-ups: the minimum interest is on this, not on what is left
+    function addMinimum(onDate) {
+      var d = daysBetween(loan.date, onDate);
+      if (minDone || !(minDays > 0) || d >= minDays) return;
+      var extra = r2(evalFormula(formula, { Principal: lent, Rate: rate, Days: minDays }) - totalInterest);
+      minDone = true;
+      if (extra <= 0) return;
+      A += extra; totalInterest += extra;
+      rows.push({ kind: 'minimum', label: 'Minimum ' + minDays + ' days', days: minDays - d, principal: lent, interest: extra });
+    }
     events.forEach(function (e) {
       var t = parseD(e.date);
       if (t > end) return;
       accrue(t);
+      // Releasing inside the minimum period: the minimum interest is charged before the release payment.
+      if (e.type === 'close') addMinimum(e.date);
       var amt = parseFloat(String(e.amount).replace(/,/g, '')) || 0;
       if (e.type === 'topup') {
-        P += amt;
+        P += amt; lent += amt;
         rows.push({ kind: 'topup', date: e.date, amount: amt, principal: P });
       } else if (e.type === 'interest') {
         A -= amt; paidInterest += amt;
@@ -215,14 +230,8 @@ var Calc = (function () {
     });
     accrue(end);
 
-    var totalDays = daysBetween(loan.date, asOf);
-    var minDays = parseFloat(loan.minDays !== undefined && loan.minDays !== '' ? loan.minDays : opts.minDays) || 0;
-    if (minDays > 0 && totalDays < minDays && P > 0) {
-      var extra = r2(evalFormula(formula, { Principal: P, Rate: rate, Days: minDays - totalDays }));
-      A += extra; totalInterest += extra;
-      rows.push({ kind: 'minimum', label: 'Minimum ' + minDays + ' days', days: minDays - totalDays,
-        principal: P, interest: extra });
-    }
+    var totalDays = Math.max(daysBetween(loan.date, asOf), 0);
+    addMinimum(asOf);
 
     return {
       rows: rows,
@@ -267,7 +276,7 @@ var Calc = (function () {
     var crore = Math.floor(n / 10000000); n %= 10000000;
     var lakh = Math.floor(n / 100000); n %= 100000;
     var th = Math.floor(n / 1000); n %= 1000;
-    if (crore) parts.push(two(crore) + ' Crore');
+    if (crore) parts.push((crore < 100 ? two(crore) : inWords(crore)) + ' Crore');
     if (lakh) parts.push(two(lakh) + ' Lakh');
     if (th) parts.push(two(th) + ' Thousand');
     if (n) parts.push(three(n));
