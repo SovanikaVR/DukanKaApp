@@ -18,6 +18,16 @@ export function customerPicker(query = {}) {
     h('div', { class: 'hint' }, 'New customer — will be saved with this entry'),
     grid(2, first, last), grid(2, mobile, village));
 
+  // "New customer" uses what is in the box at the moment it is tapped (not when the search ran).
+  const newFromBox = () => {
+    clearTimeout(timer);
+    const v = q.input.value.trim();
+    const digits = v.replace(/\D/g, '');
+    const isMobile = digits.length >= 3 && !/[A-Za-z\u0900-\u097F]/.test(v);
+    openNew(isMobile ? { mobile: digits.slice(-10) } : { firstName: v.split(/\s+/)[0] || '', lastName: v.split(/\s+/).slice(1).join(' ') });
+  };
+  const newBtn = h('button', { type: 'button', class: 'pick-item add', onclick: newFromBox }, icon('plus', 18), h('b', null, t('New customer')));
+  let seq = 0;
   q.input.addEventListener('input', () => {
     clearTimeout(timer);
     timer = setTimeout(search, 300);
@@ -25,16 +35,15 @@ export function customerPicker(query = {}) {
 
   async function search() {
     const v = q.input.value.trim();
-    if (v.length < 2) { results.replaceChildren(); return; }
+    const my = ++seq;
+    if (v.length < 2) { results.replaceChildren(v ? newBtn : null); return; }
     try {
       const r = await call('customers.search', { q: v });
-      const digits = v.replace(/\D/g, '');
+      if (my !== seq) return; // a newer search is running: ignore this older answer
       results.replaceChildren(
         ...r.results.slice(0, 4).map((c) => h('button', { type: 'button', class: 'pick-item', onclick: () => pick(c) },
           h('b', null, c.name), h('span', null, [c.village, c.mobile].filter(Boolean).join(' · ')))),
-        h('button', { type: 'button', class: 'pick-item add', onclick: () => {
-          openNew(digits.length >= 10 ? { mobile: digits } : { firstName: v.split(' ')[0], lastName: v.split(' ').slice(1).join(' ') });
-        } }, icon('plus', 18), h('b', null, t('New customer'))));
+        newBtn);
     } catch (e) {
       results.replaceChildren(h('div', { class: 'hint bad' }, e.message));
     }
@@ -53,7 +62,7 @@ export function customerPicker(query = {}) {
     mobile.input.value = pref.mobile || '';
     newForm.classList.remove('hidden');
     results.replaceChildren();
-    (pref.firstName ? village.input : first.input).focus();
+    (pref.firstName ? (pref.lastName ? village.input : last.input) : first.input).focus();
   }
 
   function draw() {

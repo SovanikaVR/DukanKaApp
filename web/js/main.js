@@ -99,7 +99,7 @@ async function render() {
     const view = await mod[m.fn](m.params, query);
     if (seq !== renderSeq) return;
     app.replaceChildren(shell(view, m.name));
-    window.scrollTo(0, 0);
+    if (!window._dkKeepScroll) window.scrollTo(0, 0);
     const first = app.querySelector('[autofocus]');
     if (first) first.focus();
   } catch (e) {
@@ -194,6 +194,23 @@ function shell(view, name) {
 
 onSessionExpired(() => { S.user = null; clearCached(); go('login'); });
 window.addEventListener('hashchange', render);
+
+// A screen was shown from the phone's saved copy and fresher data just arrived: redraw it,
+// unless the user is typing in a form or a dialog is open.
+const FORM_ROUTES = new Set(['sale', 'loan-new', 'order-new', 'repair-new', 'stock-add', 'oldgold', 'customer-edit/:id', 'rate', 'settings', 'connect', 'login', 'bills-export']);
+let freshTimer = null;
+document.addEventListener('dk-fresh', () => {
+  clearTimeout(freshTimer);
+  freshTimer = setTimeout(() => {
+    const raw = location.hash.replace(/^#\/?/, '') || 'home';
+    const m = match(raw.split('?')[0]);
+    if (!m || FORM_ROUTES.has(m.name) || isSaving() || document.querySelector('.modal-wrap')) return;
+    const a = document.activeElement;
+    if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return;
+    const y = window.scrollY;
+    render().then(() => window.scrollTo(0, y));
+  }, 250);
+});
 document.addEventListener('dk-lang', () => render());
 
 // A link like https://.../?api=<web app url> connects the app to a shop in one tap.

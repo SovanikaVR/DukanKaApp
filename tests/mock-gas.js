@@ -16,7 +16,14 @@ function makeSheet(name) {
     appendRow: (row) => { sh.data.push(row.map(String)); },
     setFrozenRows: () => {},
     getRange: (r, c, nr, nc) => {
-      if (typeof r === 'string') return { setNumberFormat: () => ({}) };
+      if (typeof r === 'string') return {
+        setNumberFormat: () => ({}),
+        // Column A search like Google's TextFinder (used to look up one row by id).
+        createTextFinder: (text) => ({ matchEntireCell() { return this; }, findNext: () => {
+          const i = sh.data.findIndex((row) => String(row[0]) === String(text));
+          return i < 0 ? null : { getRow: () => i + 1 };
+        } })
+      };
       nr = nr || 1; nc = nc || 1;
       return {
         setNumberFormat: () => ({}),
@@ -94,13 +101,15 @@ function createContext(now) {
     },
     Utilities: {
       getUuid: () => crypto.randomUUID(),
-      DigestAlgorithm: { SHA_256: 'sha256' },
+      DigestAlgorithm: { SHA_256: 'sha256', MD5: 'md5' },
+      base64EncodeWebSafe: (bytes) => Buffer.from(bytes.map((b) => (b < 0 ? b + 256 : b))).toString('base64url'),
       Charset: { UTF_8: 'utf8' },
       computeDigest: (alg, str) => Array.from(crypto.createHash('sha256').update(str, 'utf8').digest()).map((b) => (b > 127 ? b - 256 : b)),
       formatDate: fmt
     },
     CacheService: { getScriptCache: () => ({
-      get: (k) => (k in cache ? cache[k] : null), put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; }
+      get: (k) => (k in cache ? cache[k] : null), put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; },
+      getAll: (ks) => { const o = {}; ks.forEach((k) => { if (k in cache) o[k] = cache[k]; }); return o; }
     }) },
     PropertiesService: { getScriptProperties: () => ({
       getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = v; },

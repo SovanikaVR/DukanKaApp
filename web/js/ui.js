@@ -95,8 +95,9 @@ export function isSaving() { return saving; }
 function showCover(text) {
   if (!cover) {
     cover = h('div', { class: 'cover', role: 'alert', 'aria-live': 'assertive' },
-      h('div', { class: 'cover-box' }, h('span', { class: 'spinner big' }), h('div', { class: 'cover-text' })));
+      h('div', { class: 'cover-box' }, coin(), h('div', { class: 'cover-text' }), h('div', { class: 'tip-slot' })));
   }
+  cover.querySelector('.tip-slot').replaceChildren(tipLine());
   cover.querySelector('.cover-text').textContent = t(text || 'Saving… please wait');
   if (!cover.isConnected) document.body.appendChild(cover);
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
@@ -113,7 +114,7 @@ export async function busy(btn, fn, text) {
   saveFrom = location.hash;
   // One request id per form: if the reply is lost and the user taps Save again, the shop saves it only once.
   if (btn) { btn._rid = btn._rid || (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)); useRid(btn._rid); }
-  const slow = setTimeout(() => { if (cover) cover.querySelector('.cover-text').textContent = t('Internet is slow… still saving, please wait'); }, 12000);
+  const slow = setTimeout(() => { if (cover) cover.querySelector('.cover-text').textContent = t('Taking a little longer… still saving, please wait'); }, 20000);
   const label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = t('Please wait…'); }
   showCover(text);
@@ -262,7 +263,34 @@ export function dateField(label, value) {
 
 export function empty(text) { return h('div', { class: 'empty' }, text); }
 
-export function loading() { return h('div', { class: 'loading' }, h('span', { class: 'spinner' }), t('Loading…')); }
+/* ---------- friendly waiting: a spinning gold coin and a useful tip ---------- */
+const TIPS = {
+  en: ['22K gold is 91.6% pure; 18K is 75%.', '1 tola is about 11.66 grams.', 'Tap ? on any screen to see how it works.',
+    'Baki list shows everyone who still has to pay.', 'Tap ⬇ on a list to get it in Excel or PDF.', 'Same rate as yesterday? One tap on the rate screen.',
+    'Bills → Export: every bill of a month in one PDF.', 'Girvi interest is counted day by day.', 'HUID on hallmarked jewellery has 6 letters/numbers.',
+    'Making can be ₹ per gram, % or one fixed amount.', 'Switch off parts you don\'t use in Settings → Modules.', 'Your data stays in your own Google Sheet.'],
+  hi: ['22 कैरेट सोना 91.6% शुद्ध होता है; 18 कैरेट 75%।', '1 तोला लगभग 11.66 ग्राम होता है।', 'किसी भी स्क्रीन पर ? दबाकर मदद देखें।',
+    'बाकी लिस्ट में सबकी बाकी एक जगह दिखती है।', 'लिस्ट पर ⬇ दबाकर Excel या PDF लें।', 'भाव कल जैसा है? भाव स्क्रीन पर एक बटन दबाएँ।',
+    'बिल → एक्सपोर्ट: महीने के सारे बिल एक PDF में।', 'गिरवी का ब्याज दिन के हिसाब से लगता है।', 'हॉलमार्क गहने पर HUID 6 अक्षर/अंक का होता है।',
+    'मेकिंग ₹ प्रति ग्राम, % या एक फिक्स रकम हो सकती है।', 'जो हिस्से नहीं चाहिए उन्हें सेटिंग → मॉड्यूल में बंद करें।', 'आपका डेटा आपकी अपनी Google Sheet में रहता है।']
+};
+let tipN = Math.floor(Math.random() * 12);
+function tipLine() {
+  const list = TIPS[getLang() === 'hi' ? 'hi' : 'en'];
+  const el = h('div', { class: 'tip' }, list[tipN++ % list.length]);
+  // A new tip every few seconds while waiting; stops by itself when the loader is gone.
+  const timer = setInterval(() => {
+    if (!el.isConnected) { clearInterval(timer); return; }
+    el.classList.add('out');
+    setTimeout(() => { el.textContent = list[tipN++ % list.length]; el.classList.remove('out'); }, 250);
+  }, 3200);
+  return el;
+}
+export function coin() { return h('div', { class: 'coin', 'aria-hidden': 'true' }, h('span', null, '₹')); }
+
+export function miniLoading() { return h('div', { class: 'loading mini' }, coin(), h('div', { class: 'loading-text' }, t('Loading…'))); }
+
+export function loading() { return h('div', { class: 'loading' }, coin(), h('div', { class: 'loading-text' }, t('Loading…')), tipLine()); }
 
 /* ---------- icons (inline stroke svg) ---------- */
 const ICONS = {

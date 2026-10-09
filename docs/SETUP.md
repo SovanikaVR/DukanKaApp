@@ -2,10 +2,14 @@
 
 Each shop uses **its own Google account and its own Google Sheet**. Nothing is paid for, and no shop can see another shop's data.
 
-There are two parts:
+There are three parts:
 
 - **Part A** is done once, by you, for the app itself.
-- **Part B** is done once for every shop, and takes about 10 minutes on a computer.
+- **Part A2** is done once, by you: the template sheet that every shop copies.
+- **Part B** is done once for every shop **by the shop owner**, with no technical steps:
+  copy link → *Start here* → fill a form → scan a QR code.
+  The step-by-step owner guide in simple Hindi is **[NEW_SHOP_HI.md](NEW_SHOP_HI.md)** — send that to new shops.
+- **Part C (advanced)** is the old manual path, if the easy path cannot be used.
 
 ---
 
@@ -21,9 +25,46 @@ From then on, every push to `main` updates the app for every shop.
 
 ---
 
-## Part B — set up a shop (once per shop)
+## Part A2 — the template sheet (one time)
 
-Do this on a computer, signed in with the **shop owner's Gmail**.
+Follow *"For the developer"* at the end of **[NEW_SHOP_HI.md](NEW_SHOP_HI.md)**. In short:
+
+1. New sheet → **Extensions → Apps Script** → name the project **DukanKaApp** → paste `dist/Code.gs` and `dist/appsscript.json` → Save.
+2. Run **`prepareTemplate`** once from the editor (adds the Hindi START tab; refuses if the sheet holds shop data).
+3. **Share → Anyone with the link → Viewer**, and send shops the link ending in **`/copy`**:
+   `https://docs.google.com/spreadsheets/d/<TEMPLATE_ID>/copy`
+
+The template must never hold shop data. Do not run *Start here* in it and do not deploy it.
+
+---
+
+## Part B — set up a shop (easy path, once per shop)
+
+The owner follows **[NEW_SHOP_HI.md](NEW_SHOP_HI.md)**. What happens:
+
+1. **Make a copy** from the `/copy` link. This copies the sheet and its script into the owner's Drive.
+2. **Dukan App → ▶ Start here / सुरू करा.** Google asks for permission once
+   (*"Google hasn't verified this app"* → **Advanced → Go to DukanKaApp (unsafe) → Allow**).
+3. A sidebar asks for shop name, owner name, mobile, login name and PIN. **Create my shop**:
+   - creates every tab and the default settings, writes the shop name and mobile,
+   - creates the owner login,
+   - turns on the nightly backup + report trigger,
+   - publishes the web app through the Apps Script API (*Execute as: Me*, *Anyone*), with no Deploy menu.
+4. If the owner's **Google Apps Script API** switch is off, the sidebar shows one step:
+   open https://script.google.com/home/usersettings → **Google Apps Script API → On** → **Try again**.
+   If publishing fails for another reason, the sidebar shows the manual Deploy steps (Hindi + English)
+   and a box to paste the `/exec` URL.
+5. The sidebar shows the shop's app link `https://sovanikavr.github.io/DukanKaApp/?api=<web app URL>`,
+   a QR code to scan with the shop phone, **Send on WhatsApp** and **Email me the link**.
+   **Dukan App → Show my app link** shows it again later.
+
+Then do **step 6 below** (first things in the app).
+
+---
+
+## Part C — set up a shop by hand (advanced)
+
+Use this only if the easy path cannot be used. Do this on a computer, signed in with the **shop owner's Gmail**.
 
 ### 1. Make the Google Sheet
 
@@ -42,7 +83,7 @@ Do this on a computer, signed in with the **shop owner's Gmail**.
 ### 3. Run setup
 
 1. Go back to the sheet tab and reload the page. A new menu, **Dukan App**, appears.
-2. Click **Dukan App → 1. Set up this sheet**.
+2. Click **Dukan App → Advanced (manual setup) → 1. Set up this sheet**.
 3. Google asks for permission. Choose the owner's account.
    - You will see **"Google hasn't verified this app"**. This is normal: it is the shop's own script.
    - Click **Advanced → Go to … (unsafe) → Allow**.
@@ -56,7 +97,7 @@ Do this on a computer, signed in with the **shop owner's Gmail**.
    - **Execute as:** Me
    - **Who has access:** Anyone
 3. Click **Deploy** and copy the **Web app URL**. It ends with `/exec`.
-4. Back in the sheet, run **Dukan App → 2. Turn on nightly backup + email report**.
+4. Back in the sheet, run **Dukan App → Advanced (manual setup) → 2. Turn on nightly backup + email report**.
 
 ### 5. Put the app on phones
 
@@ -116,11 +157,31 @@ Both ways are free. Fully automatic sending would need the paid WhatsApp Busines
 **Phone app**
 - Updates by itself after a push to `main`.
 
-**Backend (only when `dist/Code.gs` changed)**
+**Backend — automatic (default)**
+- Bump `APP_VERSION` in `apps-script/src/00_config.js`, run `npm run build`, and push `dist/` to `main`.
+- Every night (after the backup) each shop downloads
+  `https://raw.githubusercontent.com/SovanikaVR/DukanKaApp/main/dist/Code.gs` and `dist/appsscript.json`.
+  If the version there is newer, it replaces its own code through the Apps Script API, makes a new version
+  and moves its web app to it. **The web app URL stays the same.** New tabs or settings are added the next night.
+- Each result is written to the **Audit** tab (action `auto.update`).
+- If the new `appsscript.json` adds **new permissions (oauthScopes)**, a shop does not update by itself
+  (the app would stop until the owner allows them). The owner gets one email asking to run
+  **Dukan App → Update now** → Allow → **Update now** again.
+- Owners can update at once with **Dukan App → Update now**, and switch this off with
+  **Dukan App → Auto-update on / off**.
+- ⚠️ Whoever can push to `main` changes the code in every shop. Protect the branch.
+- Shops set up by hand (Part C) also update, as long as the project has exactly one web app deployment
+  and the owner's Apps Script API switch is on.
+
+**Backend — by hand (if auto-update is off)**
 1. Paste the new `dist/Code.gs` into Apps Script and Save.
 2. Click **Deploy → Manage deployments → ✏️ Edit**.
 3. Set **Version: New version** and click **Deploy**. The web app URL stays the same.
-4. Run **Dukan App → 1. Set up this sheet** once more. It only adds anything new and never deletes data.
+4. Run **Dukan App → Advanced (manual setup) → 1. Set up this sheet** once more. It only adds anything new and never deletes data.
+
+**Upgrading a shop made before the Start-here installer existed:** paste the new `dist/Code.gs` **and**
+`dist/appsscript.json` (it now lists its permissions), Save, reload the sheet, run any **Dukan App** menu item
+and **Allow**, then do steps 2–3 above. From then on it updates itself.
 
 ---
 

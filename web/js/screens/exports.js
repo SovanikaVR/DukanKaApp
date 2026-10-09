@@ -27,13 +27,18 @@ const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const fileBase = (r) => (S.settings.shop_name || 'shop').replace(/[^\wऀ-ॿ]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) + '-' + r.title.replace(/\s+/g, '-').toLowerCase() +
   (r.from ? '-' + r.from : '') + (r.to ? '-to-' + r.to : '');
 
-function listHtml(r) {
+function listHtml(r, wide) {
   const num = (v) => typeof v === 'number';
-  return `<div class="doc listdoc"><div class="lhd"><b>${esc(S.settings.shop_name || '')}</b> · ${esc(t(r.title))}` +
-    `${r.from || r.to ? ' · ' + esc(fdate(r.from || '')) + ' – ' + esc(fdate(r.to || todayStr())) : ''} · ${r.rows.length} ${esc(t('rows'))}</div>` +
-    `<table class="ltab"><thead><tr>${r.columns.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>` +
-    r.rows.map((row) => `<tr>${row.map((v) => `<td class="${num(v) ? 'n' : ''}">${esc(num(v) ? Calc.inr(v, Number.isInteger(v) ? 0 : 2) : v)}</td>`).join('')}</tr>`).join('') +
-    '</tbody></table></div>';
+  const head = `<div class="lhd"><b>${esc(S.settings.shop_name || '')}</b> · ${esc(t(r.title))}` +
+    `${r.from || r.to ? ' · ' + esc(fdate(r.from || '')) + ' – ' + esc(fdate(r.to || todayStr())) : ''} · ${r.rows.length} ${esc(t('rows'))}</div>`;
+  const per = wide ? 30 : 44; // rows on one page, so no row is ever cut between pages
+  const pages = [];
+  for (let i = 0; i < Math.max(r.rows.length, 1); i += per) {
+    pages.push(`<div class="doc listdoc ${wide ? 'wide' : ''}">${head}<table class="ltab"><thead><tr>${r.columns.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>` +
+      r.rows.slice(i, i + per).map((row) => `<tr>${row.map((v) => `<td class="${num(v) ? 'n' : ''}">${esc(num(v) ? Calc.inr(v, Number.isInteger(v) ? 0 : 2) : v)}</td>`).join('')}</tr>`).join('') +
+      `</tbody></table><div class="lft">${Math.floor(i / per) + 1} / ${Math.ceil(r.rows.length / per) || 1}</div></div>`);
+  }
+  return manyDocs(pages);
 }
 
 /** Gets a list from the shop and gives it as an Excel file or a PDF (wide lists print sideways). */
@@ -42,7 +47,8 @@ export async function exportList(module, params = {}, kind = 'xlsx') {
   if (!r.rows.length) return 0;
   let file;
   if (kind === 'pdf') {
-    const blob = await pdfBlob(listHtml(r), r.columns.length > 8 ? 'a4l' : 'a4', 1.5);
+    const wide = r.columns.length > 8;
+    const blob = await pdfBlob(listHtml(r, wide), wide ? 'a4l' : 'a4', 1.6);
     file = new File([blob], fileBase(r) + '.pdf', { type: 'application/pdf' });
   } else {
     file = new File([xlsxBlob(r.title, r.columns, r.rows)], fileBase(r) + '.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });

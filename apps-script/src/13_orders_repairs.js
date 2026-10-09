@@ -3,8 +3,8 @@
 var _payIndex = null;
 function orderPayments_(orderId) {
   // Built once per request (cleared when a payment is added): lists of many orders stay fast.
-  if (!_payIndex || _payIndex.rows !== rows_('OrderPayments')) {
-    _payIndex = { rows: rows_('OrderPayments'), by: {} };
+  if (!_payIndex || _payIndex.rows !== rows_('OrderPayments') || _payIndex.n !== rows_('OrderPayments').length) {
+    _payIndex = { rows: rows_('OrderPayments'), n: rows_('OrderPayments').length, by: {} };
     _payIndex.rows.forEach(function (p) { (_payIndex.by[p.orderId] = _payIndex.by[p.orderId] || []).push(p); });
   }
   return (_payIndex.by[orderId] || []).map(function (p) {

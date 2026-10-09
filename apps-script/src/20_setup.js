@@ -1,19 +1,36 @@
 /* ---------- One-time setup, menu, nightly jobs, archive ---------- */
 
 function onOpen() {
-  SpreadsheetApp.getUi().createMenu('Dukan App')
-    .addItem('1. Set up this sheet', 'setup')
-    .addItem('2. Turn on nightly backup + email report', 'installNightly')
+  var ui = SpreadsheetApp.getUi();
+  ui.createMenu('Dukan App')
+    .addItem('\u25B6 Start here / सुरू करा', 'startHere')
+    .addItem('Show my app link / ऐप लिंक', 'showAppLink')
     .addSeparator()
     .addItem('Back up now', 'backupNowMenu')
     .addItem('Email today\'s report now', 'emailReportNow')
     .addItem('Reset an owner PIN', 'resetOwnerPin')
+    .addSeparator()
+    .addItem('Update now / अपडेट करें', 'updateNowMenu')
+    .addItem('Auto-update on / off', 'toggleAutoUpdate')
+    .addSubMenu(ui.createMenu('Advanced (manual setup)')
+      .addItem('1. Set up this sheet', 'setup')
+      .addItem('2. Turn on nightly backup + email report', 'installNightly'))
     .addToUi();
+  // A fresh copy of the template has no owner yet: point to the first menu item.
+  // (Simple trigger: only reads this sheet, never creates tabs.)
+  try {
+    var users = ss_().getSheetByName('Users');
+    if (!users || users.getLastRow() < 2) {
+      ss_().toast('Menu "Dukan App" \u2192 "\u25B6 Start here" दबाएं / click it to set up your shop.', 'DukanKaApp', 20);
+    }
+  } catch (e) { /* the menu is what matters */ }
 }
 
-/** Creates every tab, default settings and the first owner login. Safe to run again. */
-function setup() {
-  var ui = SpreadsheetApp.getUi();
+/**
+ * Creates every tab and the default settings. Safe to run again: it only adds what is missing.
+ * Used by setup() (menu, interactive) and by the "Start here" installer (21_install.js).
+ */
+function setupTabs_() {
   Object.keys(SCHEMA).forEach(function (name) { sheet_(name); });
   var existing = {};
   rows_('Settings').forEach(function (r) { existing[r.key] = 1; });
@@ -23,6 +40,13 @@ function setup() {
   if (!existing.cash_opening_date) setSetting_('cash_opening_date', today_());
   var blank = ss_().getSheetByName('Sheet1');
   if (blank && ss_().getSheets().length > 1 && blank.getLastRow() === 0) ss_().deleteSheet(blank);
+  PropertiesService.getScriptProperties().setProperty('tabs_version', APP_VERSION);
+}
+
+/** Creates every tab, default settings and the first owner login. Safe to run again. */
+function setup() {
+  var ui = SpreadsheetApp.getUi();
+  setupTabs_();
 
   var hasOwner = rows_('Users').some(function (u) { return u.role === 'owner' && u.active === 'true'; });
   if (!hasOwner) {
@@ -35,24 +59,37 @@ function setup() {
     createUser_(name.getResponseText().trim(), uname.getResponseText().trim(), 'owner', pin.getResponseText().trim());
   }
   ui.alert('Setup done',
-    'All tabs are ready.\n\nNext: Deploy → New deployment → Web app\n' +
-    '  • Execute as: Me\n  • Who has access: Anyone\n' +
+    'All tabs are ready.\n\nNext: Deploy \u2192 New deployment \u2192 Web app\n' +
+    '  \u2022 Execute as: Me\n  \u2022 Who has access: Anyone\n' +
     'Copy the web app URL and paste it into the app on first open.\n\n' +
-    'Then run "Dukan App → 2. Turn on nightly backup" from the menu.', ui.ButtonSet.OK);
+    'Then run "Dukan App \u2192 Advanced \u2192 2. Turn on nightly backup" from the menu.\n\n' +
+    'Easier: use "Dukan App \u2192 \u25B6 Start here" instead, it does all of this by itself.', ui.ButtonSet.OK);
 }
 
-function installNightly() {
+/** (Re)creates the one nightly trigger. No UI, so the installer can call it too. */
+function installNightlyTrigger_() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'nightly') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('nightly').timeBased().atHour(21).nearMinute(30).everyDays(1).inTimezone(tz_()).create();
+}
+
+function installNightly() {
+  installNightlyTrigger_();
   SpreadsheetApp.getUi().alert('Done. Every night around 9:30 pm the sheet is backed up and today\'s report is emailed.');
 }
 
+/** Runs every night from the time trigger. Each job is separate: one failing never stops the others. */
 function nightly() {
   try { backupNow_(); } catch (e) { console.error(e); }
   try { emailReport_(today_()); } catch (e2) { console.error(e2); }
   try { cleanSessions_(PropertiesService.getScriptProperties()); } catch (e3) { console.error(e3); }
+  // After an update the new code may have new tabs or settings: add them once.
+  try {
+    if (PropertiesService.getScriptProperties().getProperty('tabs_version') !== APP_VERSION) setupTabs_();
+  } catch (e4) { console.error(e4); }
+  // Last, so a slow download never delays the backup. updateFromGithub_ never throws in auto mode.
+  try { updateFromGithub_({ auto: true }); } catch (e5) { console.error(e5); }
 }
 
 function backupNowMenu() {

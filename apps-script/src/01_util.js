@@ -2,6 +2,8 @@
 
 var _ss = null;
 var _rowsCache = {};
+var _rawCount = {}; // rows in the sheet (before hiding cancelled ones), so a new row's number is known without reading
+var _sheets = {};
 
 function ss_() {
   if (!_ss) _ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -10,6 +12,7 @@ function ss_() {
 
 /** Returns the sheet, creating it (with headers, plain-text columns) if missing. */
 function sheet_(name) {
+  if (_sheets[name] && _headerChecked[name]) return _sheets[name];
   var sh = ss_().getSheetByName(name);
   if (!sh) {
     var headers = SCHEMA[name];
@@ -19,7 +22,7 @@ function sheet_(name) {
     sh.getRange('A:' + colLetter_(headers.length)).setNumberFormat('@');
     sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
     sh.setFrozenRows(1);
-  } else if (!_headerChecked[name]) {
+  } else if (!_headerChecked[name] && !headerKnownOk_(name)) {
     // Newer app versions add columns at the end: write the full header row once.
     var headers2 = SCHEMA[name];
     var cur = sh.getRange(1, 1, 1, headers2.length).getValues()[0];
@@ -27,11 +30,24 @@ function sheet_(name) {
       sh.getRange(1, 1, 1, headers2.length).setValues([headers2]).setFontWeight('bold');
       sh.getRange('A:' + colLetter_(headers2.length)).setNumberFormat('@');
     }
+    try { CacheService.getScriptCache().put('hdr_' + APP_VERSION + '_' + name, '1', 21600); } catch (e) { /* ignore */ }
   }
   _headerChecked[name] = true;
+  _sheets[name] = sh;
   return sh;
 }
 var _headerChecked = {};
+var _hdrOk = null;
+/** Header rows are checked once per app version (remembered in the cache), not on every request. */
+function headerKnownOk_(name) {
+  if (!_hdrOk) {
+    try {
+      var keys = Object.keys(SCHEMA).map(function (n) { return 'hdr_' + APP_VERSION + '_' + n; });
+      _hdrOk = CacheService.getScriptCache().getAll(keys) || {};
+    } catch (e) { _hdrOk = {}; }
+  }
+  return !!_hdrOk['hdr_' + APP_VERSION + '_' + name];
+}
 
 function colLetter_(n) {
   var s = '';
@@ -50,6 +66,7 @@ function rows_(name) {
   var headers = SCHEMA[name];
   var last = sh.getLastRow();
   var out = [];
+  _rawCount[name] = Math.max(last - 1, 0);
   if (last >= 2) {
     var vals = sh.getRange(2, 1, last - 1, headers.length).getValues();
     for (var i = 0; i < vals.length; i++) {
@@ -85,16 +102,39 @@ function insert_(name, obj) {
   var row = headers.map(function (h) { return toCell_(obj[h]); });
   var sh = sheet_(name);
   sh.appendRow(row);
-  delete _rowsCache[name];
+  // Keep this request's copy of the sheet up to date instead of reading the whole sheet again.
+  var list = _rowsCache[name];
+  if (list && _rawCount[name] !== undefined) {
+    _rawCount[name]++;
+    var rec = { _row: _rawCount[name] + 1 };
+    headers.forEach(function (h, j) { rec[h] = row[j].charAt(0) === "'" && row[j].charAt(1) === '=' ? row[j].slice(1) : row[j]; });
+    if (!((name === 'Cash' || name === 'LoanTxns') && rec.status === 'void')) list.push(rec);
+  } else delete _rowsCache[name];
   return obj;
+}
+
+/** Appends many records with one write (much faster than one by one). */
+function insertMany_(name, objs) {
+  if (!objs.length) return;
+  if (objs.length === 1) { insert_(name, objs[0]); return; }
+  var headers = SCHEMA[name];
+  var sh = sheet_(name);
+  var start = sh.getLastRow() + 1;
+  sh.getRange(start, 1, objs.length, headers.length)
+    .setValues(objs.map(function (o) { return headers.map(function (h) { return toCell_(o[h]); }); }));
+  delete _rowsCache[name];
 }
 
 /** Updates fields of the record whose first column equals id. */
 function update_(name, id, patch) {
   var headers = SCHEMA[name];
-  var list = rows_(name);
+  var list = _rowsCache[name];
   var rec = null;
-  for (var i = 0; i < list.length; i++) if (list[i][headers[0]] === String(id)) { rec = list[i]; break; }
+  if (list) { for (var i = 0; i < list.length; i++) if (list[i][headers[0]] === String(id)) { rec = list[i]; break; } }
+  else {
+    rec = findRowById_(name, id);
+    if (rec === undefined) { list = rows_(name); rec = null; for (var k = 0; k < list.length; k++) if (list[k][headers[0]] === String(id)) { rec = list[k]; break; } }
+  }
   if (!rec) throw new Error(name + ' record not found: ' + id);
   var sh = sheet_(name);
   var current = headers.map(function (h) { return rec[h]; });
@@ -103,7 +143,12 @@ function update_(name, id, patch) {
     if (idx >= 0) current[idx] = toCell_(patch[k]);
   });
   sh.getRange(rec._row, 1, 1, headers.length).setValues([current]);
-  delete _rowsCache[name];
+  // Update the cached record in place (no re-read of the sheet).
+  headers.forEach(function (h, j) {
+    var v = current[j];
+    rec[h] = typeof v === 'string' && v.charAt(0) === "'" && v.charAt(1) === '=' ? v.slice(1) : v;
+  });
+  if (list && (name === 'Cash' || name === 'LoanTxns') && rec.status === 'void' && list.indexOf(rec) >= 0) list.splice(list.indexOf(rec), 1);
   var merged = {};
   headers.forEach(function (h, j) { merged[h] = current[j]; });
   return merged;
@@ -111,9 +156,38 @@ function update_(name, id, patch) {
 
 function find_(name, id) {
   var key = SCHEMA[name][0];
+  if (!_rowsCache[name]) {
+    // Index lookup: find the one row by its id instead of reading the whole sheet.
+    var one = findRowById_(name, id);
+    if (one !== undefined) return one;
+  }
   var list = rows_(name);
   for (var i = 0; i < list.length; i++) if (list[i][key] === String(id)) return list[i];
   return null;
+}
+
+/** Reads one record by id with Google's TextFinder (fast on big sheets). undefined = could not use it. */
+function findRowById_(name, id) {
+  if (id === undefined || id === null || id === '') return null;
+  try {
+    var sh = sheet_(name);
+    var cell = sh.getRange('A:A').createTextFinder(String(id)).matchEntireCell(true).findNext();
+    if (!cell) return null;
+    var row = cell.getRow();
+    if (row < 2) return null;
+    var headers = SCHEMA[name];
+    var vals = sh.getRange(row, 1, 1, headers.length).getValues()[0];
+    var o = { _row: row, _single: true };
+    headers.forEach(function (h, j) {
+      var v = vals[j];
+      if (v instanceof Date) v = Utilities.formatDate(v, tz_(), 'yyyy-MM-dd');
+      v = v === null || v === undefined ? '' : String(v);
+      if (v.charAt(0) === "'" && v.charAt(1) === '=') v = v.slice(1);
+      o[h] = v;
+    });
+    if ((name === 'Cash' || name === 'LoanTxns') && o.status === 'void') return null;
+    return o;
+  } catch (e) { return undefined; }
 }
 
 function where_(name, fn) { return rows_(name).filter(fn); }
@@ -192,6 +266,34 @@ function settings_() {
   Object.keys(DEFAULT_SETTINGS).forEach(function (k) { out[k] = DEFAULT_SETTINGS[k]; });
   rows_('Settings').forEach(function (r) { out[r.key] = r.value; });
   return out;
+}
+
+/** Saves many settings with one write. */
+function setSettings_(map) {
+  var keys = Object.keys(map);
+  if (!keys.length) return;
+  var list = rows_('Settings');
+  var byKey = {};
+  list.forEach(function (r) { byKey[r.key] = r; });
+  var fresh = [];
+  keys.forEach(function (k) {
+    if (byKey[k]) byKey[k].value = String(map[k]);
+    else fresh.push({ key: k, value: String(map[k]) });
+  });
+  if (list.length) {
+    var sh = sheet_('Settings');
+    // Rows are written back in sheet order; the sheet has no hidden rows, so _row runs 2..n+1.
+    var maxRow = list.reduce(function (m, r) { return Math.max(m, r._row); }, 1);
+    var grid = [];
+    for (var i = 2; i <= maxRow; i++) grid.push(['', '']);
+    list.forEach(function (r) { grid[r._row - 2] = [toCell_(r.key), toCell_(r.value)]; });
+    var rng = sh.getRange(2, 1, grid.length, 2);
+    // Keep any row we did not read (should not happen) untouched.
+    var cur = rng.getValues();
+    grid = grid.map(function (g, i) { return g[0] === '' ? cur[i] : g; });
+    rng.setValues(grid);
+  }
+  fresh.forEach(function (f) { insert_('Settings', f); });
 }
 
 function setSetting_(key, value) {

@@ -1,5 +1,6 @@
 /* Bills and receipts: A4 / 58 mm / 80 mm layouts, print, PDF, WhatsApp. All free, all on the phone. */
 import { h, toast, fdate, g3, busy } from './ui.js';
+import { htmlPagesToPdf } from './pdf.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const m2 = (n) => Calc.inr(n, 2);
@@ -193,7 +194,7 @@ export function receiptHtml(d, size) {
 
 /* ---------- print / PDF / share ---------- */
 
-const DOC_CSS = `.listdoc{font-family:'IBM Plex Sans','Noto Sans Devanagari',Arial,sans-serif;color:#111;font-size:10px}.listdoc .lhd{font-size:13px;margin-bottom:6px}.ltab{width:100%;border-collapse:collapse}.ltab th,.ltab td{border:1px solid #9AA7B4;padding:3px 4px;text-align:left;vertical-align:top}.ltab th{background:#EEF2F6}.ltab td.n{text-align:right;white-space:nowrap}.ltab tr{page-break-inside:avoid}
+const DOC_CSS = `.listdoc{font-family:'IBM Plex Sans','Noto Sans Devanagari',Arial,sans-serif;color:#111;font-size:10px}.listdoc{width:720px}.listdoc.wide{width:1060px}.listdoc .lhd{font-size:13px;margin-bottom:6px}.listdoc .lft{text-align:right;font-size:9px;color:#555;margin-top:4px}.ltab{width:100%;border-collapse:collapse}.ltab th,.ltab td{border:1px solid #9AA7B4;padding:3px 4px;text-align:left;vertical-align:top}.ltab th{background:#EEF2F6}.ltab td.n{text-align:right;white-space:nowrap}.ltab tr{page-break-inside:avoid}
 
 .doc{font-family:'IBM Plex Sans',Arial,sans-serif;color:#111;background:#fff}
 .doc.a4{width:190mm;padding:8mm;box-sizing:border-box;font-size:12px;display:flex;flex-direction:column;gap:12px}
@@ -250,44 +251,16 @@ export function printDoc(html, size) {
   }, 600);
 }
 
-let html2pdfReady = null;
-function loadHtml2pdf() {
-  if (window.html2pdf) return Promise.resolve();
-  if (!html2pdfReady) {
-    html2pdfReady = new Promise((res, rej) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
-      s.onload = res; s.onerror = () => { html2pdfReady = null; rej(new Error('Could not load the PDF maker. Check internet.')); };
-      document.head.appendChild(s);
-    });
-  }
-  return html2pdfReady;
+/** Makes a PDF from a document's html. Several documents joined by manyDocs() become one page each. */
+export async function pdfBlob(html, paper = 'a4', scale = 2, onProgress) {
+  const parts = String(html).split(PBREAK).filter((x) => x.trim());
+  const size = paper === '58' ? 'thermal58' : paper === '80' ? 'thermal80' : paper;
+  return htmlPagesToPdf(parts.map((x) => `<style>${DOC_CSS}</style>${x}`), size, { scale, onProgress });
 }
 
-/** Makes a PDF blob from one document (or many, one per page) — A4 or A5. */
-export async function pdfBlob(html, paper = 'a4', scale = 2) {
-  await loadHtml2pdf();
-  // Rendered at full paper width, at the top-left of the page (behind the "Making PDF" cover).
-  // On a phone the screen is narrower than A4: without this the right side (amounts) was cut off.
-  const wpx = paper === 'a5' ? 560 : paper === 'a4l' ? 1080 : 760;
-  const holder = h('div', { style: { position: 'absolute', left: '0', top: '0', width: wpx + 'px', background: '#fff', zIndex: '-1' } });
-  holder.innerHTML = `<style>${DOC_CSS}</style><div class="docs">${html}</div>`;
-  document.body.appendChild(holder);
-  const y = window.scrollY;
-  window.scrollTo(0, 0);
-  try {
-    const el = holder.querySelector('.docs');
-    return await window.html2pdf().set({
-      margin: paper === 'a5' ? 5 : 8, image: { type: 'jpeg', quality: 0.92 },
-      html2canvas: { scale, useCORS: true, windowWidth: paper === 'a4l' ? 1300 : 1000, width: el.scrollWidth, scrollX: 0, scrollY: 0, x: 0, y: 0 },
-      jsPDF: { unit: 'mm', format: paper === 'a5' ? 'a5' : 'a4', orientation: paper === 'a4l' ? 'landscape' : 'portrait' },
-      pagebreak: { mode: ['css', 'legacy'], before: '.pbreak' }
-    }).from(el).outputPdf('blob');
-  } finally { holder.remove(); window.scrollTo(0, y); }
-}
-
+const PBREAK = '<div class="pbreak"></div>';
 /** Many bills in one PDF, one bill per page. */
-export function manyDocs(htmlList) { return htmlList.map((x, i) => (i ? '<div class="pbreak"></div>' : '') + x).join(''); }
+export function manyDocs(htmlList) { return htmlList.join(PBREAK); }
 
 export async function downloadPdf(html, filename, paper) {
   const blob = await pdfBlob(html, paper);

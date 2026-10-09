@@ -65,7 +65,13 @@ function sessionUser_(token) {
   var props = PropertiesService.getScriptProperties();
   var s = json_(props.getProperty('s_' + token), null);
   if (!s || s.exp < Date.now()) throw new Error('SESSION_EXPIRED');
-  var u = find_('Users', s.u);
+  // The user record is kept in the cache for 10 minutes, so a request does not have to open the sheet just to check the login.
+  var cache = CacheService.getScriptCache();
+  var u = json_(cache.get('u_' + s.u), null);
+  if (!u) {
+    u = find_('Users', s.u);
+    if (u) try { cache.put('u_' + s.u, JSON.stringify(u), 600); } catch (e) { /* ignore */ }
+  }
   if (!u || u.active !== 'true') throw new Error('SESSION_EXPIRED');
   return u;
 }
@@ -118,6 +124,7 @@ function usersSave_(user, d) {
   });
   req_(owners.length > 0, 'At least one active owner is needed');
   var saved = update_('Users', u.id, patch);
+  try { CacheService.getScriptCache().remove('u_' + u.id); } catch (e) { /* ignore */ }
   if (patch.active === 'false' || patch.pinHash) dropSessionsOf_(u.id);
   audit_(user, 'user.update', u.id, { name: patch.name, role: patch.role, active: patch.active, pin: !!d.pin });
   return publicUser_(saved);

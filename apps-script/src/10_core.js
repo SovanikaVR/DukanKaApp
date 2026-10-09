@@ -29,7 +29,7 @@ function settingsSave_(user, d) {
     }
     changed[k] = v;
   });
-  Object.keys(changed).forEach(function (k) { setSetting_(k, changed[k]); });
+  setSettings_(changed);
   audit_(user, 'settings.save', '', changed);
   return settings_();
 }

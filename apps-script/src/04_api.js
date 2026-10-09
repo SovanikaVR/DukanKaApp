@@ -107,7 +107,7 @@ function handle_(action, token, data) {
   var user = sessionUser_(token);
   if (OWNER_ONLY[action]) req_(user.role === 'owner', 'Only the owner can do this');
   if (user.role === 'viewer') req_(READ_ONLY[action] || action === 'auth.logout', 'View-only users cannot change data');
-  if (READ_ONLY[action]) return fn(user, data, token);
+  if (READ_ONLY[action]) return cachedRead_(action, user, data, function () { return fn(user, data, token); });
   // Every save from the app carries a request id (_rid). If the same save arrives twice
   // (double tap, slow network, retry), the first result is returned and nothing is saved again.
   var rid = data && data._rid ? 'rid_' + String(data._rid).slice(0, 60) : '';
@@ -121,6 +121,7 @@ function handle_(action, token, data) {
     }
     migrateDues_();
     var result = fn(user, data, token);
+    bumpDataVersion_();
     if (cache) {
       try {
         var str = JSON.stringify(result === undefined ? {} : result);
@@ -152,4 +153,41 @@ function hideCost_(user, bill) {
   if (user && user.role === 'owner') return bill;
   (bill.lines || []).forEach(function (l) { delete l.cost; if (l.part) delete l.part.cost; });
   return bill;
+}
+
+/* ---------- Read cache: the "index" that makes repeated screens instant ----------
+ * Reading big sheets is the slow part. Every answer to a read is kept in CacheService for 10 minutes,
+ * filed under the current "data version". Any save changes the version, so after a save every screen
+ * is read fresh; until then the same screen comes back in a few milliseconds without opening the sheet. */
+
+function dataVersion_() {
+  var c = CacheService.getScriptCache();
+  var v = c.get('dataver');
+  if (!v) { v = String(Date.now()); c.put('dataver', v, 21600); }
+  return v;
+}
+function bumpDataVersion_() {
+  try { CacheService.getScriptCache().put('dataver', String(Date.now()) + Math.random().toString(36).slice(2, 6), 21600); } catch (e) { /* ignore */ }
+}
+
+var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1 };
+
+function cachedRead_(action, user, data, run) {
+  if (NO_READ_CACHE[action]) return run();
+  var cache = CacheService.getScriptCache();
+  var key;
+  try {
+    var raw = [dataVersion_(), user.id, user.role, today_(), action, JSON.stringify(data || {})].join('|');
+    key = 'rc_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, raw, Utilities.Charset.UTF_8));
+    var hit = cache.get(key);
+    if (hit) return JSON.parse(hit);
+  } catch (e) { key = null; }
+  var result = run();
+  if (key) {
+    try {
+      var str = JSON.stringify(result === undefined ? null : result);
+      if (str.length * 3 < 95000) cache.put(key, str, 600);
+    } catch (e2) { /* too big or cache full: fine */ }
+  }
+  return result;
 }

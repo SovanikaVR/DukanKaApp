@@ -1,7 +1,7 @@
 /* A saved bill (preview + send/print) and the bills list. */
 import { call } from '../api.js';
 import { isOwner, isViewer } from '../state.js';
-import { h, screen, field, busy, toast, inr, fdate, empty, go, confirmBox, seg, card } from '../ui.js';
+import { h, screen, field, busy, toast, inr, fdate, empty, go, confirmBox, seg, card, miniLoading } from '../ui.js';
 import { invoiceHtml, docActions, billText, docCss, billFields, FIELD_LABELS } from '../bill.js';
 import { exportCsvButton } from './exports.js';
 import { t } from '../i18n.js';
@@ -63,7 +63,7 @@ export async function list(params, query) {
   const from = field('From', { type: 'date', value: query.from || '' });
   const to = field('To', { type: 'date', value: query.to || '' });
   const fy = field('Old year (e.g. 25-26)', { value: query.fy || '' });
-  const out = h('div', { class: 'list' });
+  const out = h('div', { class: 'list' }, miniLoading());
   async function run() {
     out.replaceChildren(h('div', { class: 'hint' }, 'Loading…'));
     try {

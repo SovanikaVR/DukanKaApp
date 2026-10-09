@@ -1,7 +1,7 @@
 /* Customer search, profile and edit. */
 import { call } from '../api.js';
 import { modOn, isViewer } from '../state.js';
-import { h, screen, field, card, grid, busy, toast, inr, fdate, g3, icon, empty, go, sec, ask } from '../ui.js';
+import { h, screen, field, card, grid, busy, toast, inr, fdate, g3, icon, empty, go, sec, ask, miniLoading } from '../ui.js';
 import { t } from '../i18n.js';
 import { exportCsvButton } from './exports.js';
 
@@ -11,7 +11,7 @@ export async function search(params, query) {
   q.input.setAttribute('autofocus', '');
   q.input.setAttribute('autocomplete', 'off');
   const villages = h('div', { class: 'chips' });
-  const list = h('div', { class: 'list' });
+  const list = h('div', { class: 'list' }, miniLoading());
   const count = h('div', { class: 'hint' });
   let timer;
   q.input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 250); });

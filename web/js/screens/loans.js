@@ -1,7 +1,7 @@
 /* Girvi: list, new loan, view / release with month-by-month interest. */
 import { call } from '../api.js';
 import { S, setting, purityFor, isViewer, isOwner } from '../state.js';
-import { h, screen, field, card, grid, seg, busy, toast, num, inr, fdate, g3, sec, go, empty, remember, todayStr, chips, ask, confirmBox } from '../ui.js';
+import { h, screen, field, card, grid, seg, busy, toast, num, inr, fdate, g3, sec, go, empty, remember, todayStr, chips, ask, confirmBox, miniLoading } from '../ui.js';
 import { customerPicker } from '../picker.js';
 import { receiptHtml, docActions } from '../bill.js';
 import { t } from '../i18n.js';
@@ -10,7 +10,7 @@ import { exportCsvButton } from './exports.js';
 export async function list(params, query) {
   let status = query.s || 'open';
   const q = field('Search name, mobile, item', { value: query.q || '' });
-  const out = h('div', { class: 'list' });
+  const out = h('div', { class: 'list' }, miniLoading());
   const summary = h('div', { class: 'stat-row' });
   const tabs = chips([{ label: 'Open', value: 'open', on: status === 'open' }, { label: 'Closed', value: 'closed', on: status === 'closed' }],
     (v) => go('loans?s=' + v));
