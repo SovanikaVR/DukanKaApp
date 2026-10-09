@@ -8,7 +8,14 @@
 var OZ_G = 31.1034768;
 
 function fetchJson_(url, headers) {
-  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: headers || {}, followRedirects: true });
+  var res;
+  try {
+    res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: headers || {}, followRedirects: true });
+  } catch (e) {
+    // Google has not been allowed to reach the internet yet (new permission after an update).
+    req_(!/permission|external_request|authoriz/i.test(String(e && e.message)), 'NEED_PERMISSION: Open the Google Sheet → Extensions → Apps Script → choose "allowPermissions" at the top → Run → Allow. Then Deploy → Manage deployments → Edit → New version → Deploy.');
+    throw e;
+  }
   req_(res.getResponseCode() === 200, 'Live rate service did not answer (' + res.getResponseCode() + ')');
   return JSON.parse(res.getContentText());
 }
@@ -51,4 +58,11 @@ function liveRates_() {
     g24: Math.round(g24g * 100) / 100, g22: Math.round(g24g * p22) / 100, g18: Math.round(g24g * p18) / 100, silver: Math.round(agg * 100) / 100,
     per10: { g24: Math.round(g24g * 10), g22: Math.round(g24g * p22 / 10), g18: Math.round(g24g * p18 / 10) }, silverKg: Math.round(agg * 1000)
   };
+}
+
+/** Run this once from the Apps Script editor (or the sheet menu) after an update that needs new Google permissions. */
+function allowPermissions() {
+  UrlFetchApp.fetch('https://api.gold-api.com/price/XAU', { muteHttpExceptions: true });
+  ScriptApp.getProjectTriggers();
+  try { SpreadsheetApp.getUi().alert('Done. Permissions are allowed. / अनुमति मिल गई।'); } catch (e) { Logger.log('Permissions are allowed.'); }
 }

@@ -10,7 +10,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.5.0';
+var APP_VERSION = '1.5.1';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -2745,7 +2745,14 @@ function exportList_(user, d) {
 var OZ_G = 31.1034768;
 
 function fetchJson_(url, headers) {
-  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: headers || {}, followRedirects: true });
+  var res;
+  try {
+    res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: headers || {}, followRedirects: true });
+  } catch (e) {
+    // Google has not been allowed to reach the internet yet (new permission after an update).
+    req_(!/permission|external_request|authoriz/i.test(String(e && e.message)), 'NEED_PERMISSION: Open the Google Sheet → Extensions → Apps Script → choose "allowPermissions" at the top → Run → Allow. Then Deploy → Manage deployments → Edit → New version → Deploy.');
+    throw e;
+  }
   req_(res.getResponseCode() === 200, 'Live rate service did not answer (' + res.getResponseCode() + ')');
   return JSON.parse(res.getContentText());
 }
@@ -2790,6 +2797,13 @@ function liveRates_() {
   };
 }
 
+/** Run this once from the Apps Script editor (or the sheet menu) after an update that needs new Google permissions. */
+function allowPermissions() {
+  UrlFetchApp.fetch('https://api.gold-api.com/price/XAU', { muteHttpExceptions: true });
+  ScriptApp.getProjectTriggers();
+  try { SpreadsheetApp.getUi().alert('Done. Permissions are allowed. / अनुमति मिल गई।'); } catch (e) { Logger.log('Permissions are allowed.'); }
+}
+
 /* ===== 20_setup.js ===== */
 /* ---------- One-time setup, menu, nightly jobs, archive ---------- */
 
@@ -2804,6 +2818,7 @@ function onOpen() {
     .addItem('Reset an owner PIN', 'resetOwnerPin')
     .addItem('Check my data / डेटा जाँचें', 'checkDataMenu')
     .addItem('Restore from a backup', 'restoreFromBackupMenu')
+    .addItem('Allow permissions / अनुमति दें', 'allowPermissions')
     .addSeparator()
     .addItem('Update now / अपडेट करें', 'updateNowMenu')
     .addItem('Auto-update on / off', 'toggleAutoUpdate')

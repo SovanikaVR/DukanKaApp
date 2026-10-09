@@ -11,6 +11,7 @@ function onOpen() {
     .addItem('Reset an owner PIN', 'resetOwnerPin')
     .addItem('Check my data / डेटा जाँचें', 'checkDataMenu')
     .addItem('Restore from a backup', 'restoreFromBackupMenu')
+    .addItem('Allow permissions / अनुमति दें', 'allowPermissions')
     .addSeparator()
     .addItem('Update now / अपडेट करें', 'updateNowMenu')
     .addItem('Auto-update on / off', 'toggleAutoUpdate')

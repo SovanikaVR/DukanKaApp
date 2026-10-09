@@ -7,7 +7,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.5.0';
+var APP_VERSION = '1.5.1';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {

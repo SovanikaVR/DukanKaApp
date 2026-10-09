@@ -155,6 +155,14 @@ function liveCard() {
       isViewer() ? null : h('div', { class: 'row-actions' },
         h('a', { class: 'btn2 small', href: '#/rate?g24=' + L.g24 + '&g22=' + L.g22 + '&g18=' + L.g18 + '&ag=' + L.silver }, t('Use as today\'s rate')),
         today && S.user.role === 'owner' && Math.abs(today.g24 - L.g24) / today.g24 > 0.002 ? h('button', { class: 'btn2 small', onclick: match }, t('Match my city rate')) : null));
-  }).catch((e) => box.replaceChildren(h('div', { class: 'sec gold' }, t('Market rate (live)')), h('div', { class: 'hint' }, e.message)));
+  }).catch((e) => {
+    const perm = /NEED_PERMISSION|UrlFetchApp|external_request|permission/i.test(e.message || '');
+    const msg = perm
+      ? (S.user.role === 'owner'
+        ? t('Live rate needs one Google permission. Open your Google Sheet → menu DukanKaApp → "Allow permissions" → Allow. Then in Apps Script: Deploy → Manage deployments → Edit → New version → Deploy.')
+        : t('Live rate is not switched on yet. Please ask the owner.'))
+      : t('Live rate not available right now. Try again later.');
+    box.replaceChildren(h('div', { class: 'sec gold' }, t('Market rate (live)')), h('div', { class: 'hint' }, msg));
+  });
   return box;
 }
