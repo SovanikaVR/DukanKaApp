@@ -337,6 +337,27 @@ test('bills like the sample: making %, gross weight, own bill no, note, print op
   assert.ok(!ok('export.list', { module: 'stock', status: 'all' }, E).columns.includes('Our cost ₹'));
 });
 
+test('live market rate: world price × ₹ × market difference, city adjustment', () => {
+  const L = ok('rates.live', {}, T);
+  const world = 4183.4 * 96.83 / 31.1034768;
+  assert.strictEqual(Math.round(L.g24), Math.round(world * 1.09));
+  assert.strictEqual(L.per10.g24, Math.round(world * 1.09 * 10));
+  ok('settings.save', { live_city: 'Nanded', live_city_adjust: '500' }, T);
+  g.CacheService.getScriptCache().remove('live_rates');
+  const L2 = ok('rates.live', {}, T);
+  assert.strictEqual(L2.city, 'Nanded');
+  assert.strictEqual(L2.per10.g24, Math.round((world * 1.09 + 50) * 10));
+});
+
+test('data health check finds a repeated id', () => {
+  assert.strictEqual(ok('admin.check', {}, T).ok, true);
+  const c = ok('customers.search', { q: '' }, T).results[0];
+  g.insert_('Customers', { id: c.id, firstName: 'Copy' });
+  const r = ok('admin.check', {}, T);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.problems.some((p) => /same id/.test(p)));
+});
+
 test('archive finished year keeps bills searchable', () => {
   const t2 = g.createContext ? null : null; // archive needs a finished year; fake one bill in FY 25-26
   g.insert_('Sales', { id: 'S_OLD', billNo: 'EST/25-26/0009', type: 'EST', fy: '25-26', date: '2026-03-10',

@@ -107,6 +107,12 @@ function createContext(now) {
       computeDigest: (alg, str) => Array.from(crypto.createHash('sha256').update(str, 'utf8').digest()).map((b) => (b > 127 ? b - 256 : b)),
       formatDate: fmt
     },
+    // Live-rate services answered with fixed sample numbers (no internet in tests).
+    UrlFetchApp: { fetch: (url) => {
+      const body = /XAU/.test(url) ? { price: 4183.4, updatedAt: '2026-10-09T11:45:20Z' } : /XAG/.test(url) ? { price: 60.28, updatedAt: '2026-10-09T11:06:19Z' }
+        : /er-api/.test(url) ? { result: 'success', rates: { INR: 96.83 } } : null;
+      return { getResponseCode: () => (body ? 200 : 404), getContentText: () => JSON.stringify(body || {}) };
+    } },
     CacheService: { getScriptCache: () => ({
       get: (k) => (k in cache ? cache[k] : null), put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; },
       getAll: (ks) => { const o = {}; ks.forEach((k) => { if (k in cache) o[k] = cache[k]; }); return o; }

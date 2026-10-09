@@ -2,7 +2,7 @@
 import { call } from '../api.js';
 import { S, isViewer } from '../state.js';
 import { h, screen, field, card, seg, busy, toast, inr, fdate, todayStr, modal, icon } from '../ui.js';
-import { xlsxBlob } from '../xlsx.js';
+import { xlsxBlob, xlsxBook } from '../xlsx.js';
 import { invoiceHtml, pdfBlob, manyDocs } from '../bill.js';
 import { t } from '../i18n.js';
 
@@ -127,4 +127,33 @@ export async function bills(params, query) {
     typeSeg, paperSeg, cancelledSeg, status,
     h('div', { class: 'hint' }, t('One PDF with every bill (one bill per page). Share it on WhatsApp or e-mail to your accountant, or save it.'))
   ], [run, csv], { back: '#/bills', help: 'sale' });
+}
+
+/* ---------- everything in one Excel file (backup, accountant, or moving to another app) ---------- */
+
+const ALL = [['customers', {}], ['dues', {}], ['bills', {}], ['girvi', { status: 'all' }], ['orders', {}], ['repairs', {}],
+  ['oldgold', {}], ['stock', { status: 'all' }], ['cash', {}], ['parties', {}]];
+
+export async function exportEverything() {
+  const lists = [];
+  for (const [m, p] of ALL) {
+    try { lists.push(await call('export.list', Object.assign({ module: m }, p))); } catch (e) { /* module not in use */ }
+  }
+  const find = (title) => lists.find((l) => l.title === title);
+  const sheets = lists.map((l) => ({ name: l.title, columns: l.columns, rows: l.rows }));
+  // Ready-made tabs for moving to another billing app (Vyapar, Tally, Khatabook …): parties with balance, and items in stock.
+  const cust = find('Customers');
+  if (cust) {
+    sheets.unshift({ name: 'For other apps - Parties', columns: ['Name', 'Phone', 'Address', 'Opening balance (to receive)', 'Type'],
+      rows: cust.rows.map((r) => [((r[0] || '') + ' ' + (r[1] || '')).trim(), r[2] || '', [r[3], r[4]].filter(Boolean).join(', '), r[5] || 0, 'Customer']) });
+  }
+  const stock = find('Stock');
+  if (stock) {
+    const ci = (n) => stock.columns.indexOf(n);
+    sheets.splice(1, 0, { name: 'For other apps - Items', columns: ['Item name', 'Item code', 'Category', 'Opening qty (pcs)', 'Weight (g)', 'Purity %', 'Cost price ₹'],
+      rows: stock.rows.filter((r) => r[ci('Status')] === 'in').map((r) => [r[ci('Item')], r[ci('Tag')], r[ci('Category')], r[ci('Pieces')], r[ci('Net wt')], r[ci('Purity %')], ci('Our cost ₹') >= 0 ? r[ci('Our cost ₹')] : '']) });
+  }
+  const name = (S.settings.shop_name || 'shop').replace(/[^\wऀ-ॿ]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) + '-all-data-' + todayStr() + '.xlsx';
+  await shareFiles([new File([xlsxBook(sheets)], name, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })], t('All shop data'));
+  return sheets.length;
 }

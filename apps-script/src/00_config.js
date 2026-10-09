@@ -7,7 +7,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.4.0';
+var APP_VERSION = '1.5.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -87,6 +87,11 @@ var DEFAULT_SETTINGS = {
   cash_opening: '0',
   cash_opening_date: '',
   report_email: '',
+  live_city: '',
+  live_premium_pct: '9',
+  live_silver_pct: '',
+  live_city_adjust: '0',
+  live_goldapi_key: '',
   modules: JSON.stringify({
     girvi: true, sale: true, oldgold: true, orders: true, repair: true, stock: true,
     melt: true, wholesaler: true, karigar: true, cash: true, reports: true
@@ -103,5 +108,5 @@ var DEFAULT_SETTINGS = {
 var OWNER_ONLY = {
   'settings.save': 1, 'users.list': 1, 'users.save': 1, 'sale.void': 1, 'cash.opening': 1,
   'admin.archive': 1, 'admin.backupNow': 1, 'loans.edit': 1, 'loans.void': 1,
-  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'stock.update': 1, 'dues.adjust': 1
+  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'admin.check': 1, 'stock.update': 1, 'dues.adjust': 1
 };

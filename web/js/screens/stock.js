@@ -1,7 +1,7 @@
 /* Stock: summary by category, item list, add items. */
 import { call } from '../api.js';
 import { list as settingList, purityFor, isViewer, isOwner } from '../state.js';
-import { h, screen, field, card, grid, seg, busy, toast, inr, g3, go, empty, chips, num, ask } from '../ui.js';
+import { h, screen, field, card, grid, seg, busy, toast, inr, g3, go, empty, chips, num, ask, remember } from '../ui.js';
 import { t } from '../i18n.js';
 import { exportCsvButton } from './exports.js';
 
@@ -57,7 +57,7 @@ export async function add(params, query) {
   const addRow = () => {
     let metal = query.m === 'silver' ? 'silver' : 'gold';
     const name = field(t('Item'), {});
-    const category = field('Category', { value: cats[0] || '' });
+    const category = field('Category', { value: remember('stock_cat'), placeholder: t('Type or pick (e.g. Ring)') });
     category.input.setAttribute('list', 'cats');
     const purity = field(t('Purity %'), { type: 'num', value: metal === 'silver' ? '100' : purityFor('22K') });
     const gross = field('Gross wt (g)', { type: 'num' });
@@ -78,6 +78,7 @@ export async function add(params, query) {
   addRow();
   const save = h('button', { class: 'btn', onclick: () => busy(save, async () => {
     const items = rows.map((r) => r.get()).filter((i) => num(i.netWt) > 0 || num(i.grossWt) > 0);
+    rows.forEach((x) => { const c = x.get().category; if (c) remember('stock_cat', c); });
     const r = await call('stock.add', { items });
     toast(r.length + ' item(s) added · tags ' + r.map((x) => x.tag).join(', '));
     go('stock');

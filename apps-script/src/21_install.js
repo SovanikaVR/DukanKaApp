@@ -136,7 +136,7 @@ function installerCreateShop(form) {
       setSetting_('shop_name', String(form.shopName).trim());
       try { ss_().rename(String(form.shopName).trim() + ' — DukanKaApp'); } catch (e) { /* name is cosmetic */ }
     }
-    if (form.mobile) setSetting_('shop_mobile', cleanMobile_(form.mobile));
+    if (form.mobile) setSetting_('shop_mobile', installMobile_(form.mobile));
     // The START tab from the template is not needed any more.
     var start = ss_().getSheetByName('START');
     if (start && ss_().getSheets().length > 1) ss_().deleteSheet(start);
@@ -245,7 +245,7 @@ function qrUrl_(text) {
   return 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=' + encodeURIComponent(text);
 }
 
-function cleanMobile_(m) {
+function installMobile_(m) {
   var d = String(m || '').replace(/\D/g, '');
   if (d.length === 12 && d.indexOf('91') === 0) d = d.slice(2);
   if (d.length === 11 && d.charAt(0) === '0') d = d.slice(1);
@@ -256,7 +256,7 @@ function cleanMobile_(m) {
 function checkInstallForm_(f) {
   if (!String(f.shopName || '').trim()) return 'दुकान का नाम लिखें। / Enter the shop name.';
   if (!String(f.ownerName || '').trim()) return 'अपना नाम लिखें। / Enter your name.';
-  if (!/^\d{10}$/.test(cleanMobile_(f.mobile))) return 'मोबाइल नंबर 10 अंकों का लिखें। / Mobile number should be 10 digits.';
+  if (!/^\d{10}$/.test(installMobile_(f.mobile))) return 'मोबाइल नंबर 10 अंकों का लिखें। / Mobile number should be 10 digits.';
   if (!/^[a-zA-Z0-9._-]{2,20}$/.test(String(f.loginName || '').trim())) {
     return 'लॉगिन नाम छोटा, अंग्रेज़ी अक्षरों में, बिना space (जैसे viju)। / Login name: English letters/numbers, no spaces (e.g. viju).';
   }

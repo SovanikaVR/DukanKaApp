@@ -53,7 +53,7 @@ export async function view({ id }) {
       { key: 'cash', label: 'Labour / cash to pay (₹)', type: 'num', value: '' },
       { key: 'addStock', label: 'Add to stock now?', options: [{ value: 'yes', label: 'Yes, as one lot' }, { value: 'no', label: 'No, I will add items' }], value: 'yes' },
       { key: 'name', label: 'Item / lot name', value: '' },
-      { key: 'category', label: 'Category', value: (settingList('item_categories')[0] || 'Other') },
+      { key: 'category', label: 'Category', value: '' },
       { key: 'karat', label: t('Purity %'), options: [{ value: '22K', label: '22K' }, { value: '18K', label: '18K' }, { value: '24K', label: '24K' }], value: '22K' },
       { key: 'date', label: t('Date'), type: 'date', value: S.today }]);
     if (!v) return;

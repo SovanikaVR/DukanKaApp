@@ -84,6 +84,11 @@ function exportList_(user, d) {
         return [c.date, c.dir === 'in' ? 'In' : 'Out', c.mode === 'upi' ? 'UPI' : 'Cash', num_(c.amount), c.category, c.notes, c.by];
       })
     };
+  } else if (m === 'parties') {
+    out = {
+      title: 'Wholesalers & karigars', columns: ['Type', 'Name', 'Mobile', 'Gold (fine g) +we owe / −they hold', 'Cash ₹ +we owe', 'Notes'],
+      rows: partiesList_({}).map(function (p) { return [p.type === 'karigar' ? 'Karigar' : 'Wholesaler', p.name, p.mobile, p.goldG, p.cash, p.notes || '']; })
+    };
   } else if (m === 'customers') {
     var due = {};
     rows_('Dues').forEach(function (x) { due[x.customerId] = (due[x.customerId] || 0) + num_(x.amount); });

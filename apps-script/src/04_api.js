@@ -7,6 +7,7 @@
  */
 function doPost(e) {
   var out;
+  finishInstall_(); // a shop made by the one-link installer finishes itself on first use (no-op afterwards)
   try {
     var body = json_(e && e.postData && e.postData.contents, {});
     out = { ok: true, data: handle_(body.action, body.token, body.data || {}) };
@@ -17,7 +18,10 @@ function doPost(e) {
 }
 
 /** Opening the web app link in a browser just shows that the backend is alive. */
-function doGet() {
+function doGet(e) {
+  finishInstall_();
+  var ready = installReadyPage_(e);
+  if (ready) return ready;
   var s = settings_();
   return ContentService.createTextOutput(JSON.stringify({
     ok: true, app: 'DukanKaApp', version: APP_VERSION, shop: s.shop_name
@@ -84,6 +88,8 @@ var ROUTES = {
   'repairs.edit': function (u, d) { return repairEdit_(u, d); },
   'cash.void': function (u, d) { return cashVoid_(u, d); },
   'home.summary': function () { return homeSummary_(); },
+  'rates.live': function () { return liveRates_(); },
+  'admin.check': function () { return checkData_(); },
   'sale.print': function (u, d) { return salePrint_(u, d); },
   'sale.export': function (u, d) { return saleExport_(d); },
   'export.list': function (u, d) { return exportList_(u, d); },
@@ -96,7 +102,7 @@ var READ_ONLY = {
   'sale.get': 1, 'oldgold.list': 1, 'loans.list': 1, 'loans.get': 1, 'orders.list': 1, 'orders.get': 1,
   'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'melt.list': 1, 'fine.summary': 1,
   'parties.list': 1, 'parties.ledger': 1, 'cash.list': 1, 'reports.daily': 1, 'reports.month': 1,
-  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1, 'sale.export': 1, 'export.list': 1
+  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1, 'rates.live': 1, 'admin.check': 1, 'sale.export': 1, 'export.list': 1
 };
 
 function handle_(action, token, data) {
@@ -170,7 +176,7 @@ function bumpDataVersion_() {
   try { CacheService.getScriptCache().put('dataver', String(Date.now()) + Math.random().toString(36).slice(2, 6), 21600); } catch (e) { /* ignore */ }
 }
 
-var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1 };
+var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1, 'admin.check': 1, 'rates.live': 1 };
 
 function cachedRead_(action, user, data, run) {
   if (NO_READ_CACHE[action]) return run();

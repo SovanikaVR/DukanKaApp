@@ -2,14 +2,16 @@
 
 Each shop uses **its own Google account and its own Google Sheet**. Nothing is paid for, and no shop can see another shop's data.
 
-There are three parts:
+The parts:
 
 - **Part A** is done once, by you, for the app itself.
-- **Part A2** is done once, by you: the template sheet that every shop copies.
-- **Part B** is done once for every shop **by the shop owner**, with no technical steps:
-  copy link → *Start here* → fill a form → scan a QR code.
-  The step-by-step owner guide in simple Hindi is **[NEW_SHOP_HI.md](NEW_SHOP_HI.md)** — send that to new shops.
-- **Part C (advanced)** is the old manual path, if the easy path cannot be used.
+- **Part A1** is done once, by you: the **one-link installer** ([installer/README.md](../installer/README.md)).
+- **Part A2** is done once, by you: the template sheet that every shop copies (used by path 2 only).
+- **Part B1 (easiest)** is done once for every shop **by the shop owner**, even on a phone:
+  one link → sign in → Allow → fill a form → *Allow your shop app* → scan a QR code.
+- **Part B2** is the copy-the-template path: copy link → *Start here* → fill a form → scan a QR code.
+  The step-by-step owner guide in simple Hindi for both paths is **[NEW_SHOP_HI.md](NEW_SHOP_HI.md)** — send that to new shops.
+- **Part C (advanced)** is the old manual path, if neither easy path can be used.
 
 ---
 
@@ -22,6 +24,16 @@ There are three parts:
    **https://sovanikavr.github.io/DukanKaApp/**
 
 From then on, every push to `main` updates the app for every shop.
+
+---
+
+## Part A1 — the one-link installer (one time)
+
+Follow **[installer/README.md](../installer/README.md)**. In short: a separate Apps Script project
+(`installer/Code.gs` + `installer/appsscript.json`) deployed once as a web app,
+*Execute as: User accessing the web app*, *Who has access: Anyone with a Google account*.
+Its `/exec` link is **the one link** you give to every new shop. Read the section on Google's
+**100-user limit for unverified apps** there before handing the link out widely.
 
 ---
 
@@ -38,9 +50,40 @@ The template must never hold shop data. Do not run *Start here* in it and do not
 
 ---
 
-## Part B — set up a shop (easy path, once per shop)
+## Part B1 — set up a shop with one link (easiest, once per shop)
 
-The owner follows **[NEW_SHOP_HI.md](NEW_SHOP_HI.md)**. What happens:
+The owner follows *रास्ता 1* in **[NEW_SHOP_HI.md](NEW_SHOP_HI.md)**. What happens:
+
+1. The owner opens the installer link and signs in. Google asks for the installer's permissions once
+   (*"Google hasn't verified this app"* → **Advanced → Go to DukanKaApp Installer (unsafe) → Allow**).
+2. A form asks for shop name, owner name, mobile, login name, PIN (twice) and city (optional).
+   **Create my shop** runs as the owner, in the owner's account:
+   - creates the Google Sheet *"&lt;Shop&gt; — DukanKaApp"* with one tab **Setup** (shop details, login name,
+     a random salt and the SHA-256 hash of the PIN — never the PIN itself),
+   - creates an Apps Script project bound to that sheet, uploads `dist/Code.gs` + `dist/appsscript.json`
+     from GitHub, makes a version and deploys the web app (all through the Apps Script API),
+   - adds the web app URL to the Setup tab.
+3. If the owner's **Google Apps Script API** switch is off, the page says so, links to
+   https://script.google.com/home/usersettings and offers **Try again**. Progress is remembered, so a retry
+   never makes a second sheet.
+4. The page shows **Allow your shop app (one time)**. It opens `<web app URL>?setup=1`: Google asks the
+   owner to allow the shop's own script (a new project, so a new permission screen). Right after that, the
+   shop backend finishes by itself (`finishInstall_` in `apps-script/src/22_install_finish.js`): it creates
+   all tabs and default settings, writes the shop name / mobile (city goes into the shop address if that is
+   empty), creates the owner login from the stored salt + hash, turns on the nightly trigger, remembers its
+   deployment for auto-update, emails the owner the app link once, and **deletes the Setup tab**.
+5. The *"Your shop is ready"* page shows the app link, a QR code, WhatsApp share and the login name.
+   That page is served only for 48 hours after the install; later, **Dukan App → Show my app link** in the sheet shows the link.
+
+From then on the shop is exactly like a shop made with Part B2: same menu, same nightly backup, same auto-update.
+
+Then do **step 6 below** (first things in the app).
+
+---
+
+## Part B2 — set up a shop from the template copy (once per shop)
+
+The owner follows *रास्ता 2* in **[NEW_SHOP_HI.md](NEW_SHOP_HI.md)**. What happens:
 
 1. **Make a copy** from the `/copy` link. This copies the sheet and its script into the owner's Drive.
 2. **Dukan App → ▶ Start here / सुरू करा.** Google asks for permission once
@@ -64,7 +107,7 @@ Then do **step 6 below** (first things in the app).
 
 ## Part C — set up a shop by hand (advanced)
 
-Use this only if the easy path cannot be used. Do this on a computer, signed in with the **shop owner's Gmail**.
+Use this only if neither easy path can be used. Do this on a computer, signed in with the **shop owner's Gmail**.
 
 ### 1. Make the Google Sheet
 
@@ -185,12 +228,62 @@ and **Allow**, then do steps 2–3 above. From then on it updates itself.
 
 ---
 
+## Changes for one shop only (customising)
+
+**Settings that live in the shop's sheet** survive every update, because updates only replace code:
+bill layout and print options, shop details, standard values, **Modules on/off**, the **admin-editable formulas**,
+users and roles — everything set in the app's **Settings** (stored in the shop's *Settings* / *Users* tabs).
+Prefer these whenever they can do the job.
+
+**Code-level changes for one shop** go in an **extra script file** in that shop's Apps Script project
+(sheet → **Extensions → Apps Script → + → Script**, e.g. `Custom.gs`). What auto-update and **Update now**
+(`updateFromGithub_` in `apps-script/src/21_install.js`) do exactly:
+
+- They read every file of the project (`GET …/content`) and send **all of them back** in one
+  `updateContent` call. Only two files are changed:
+  - the **main code file** — the one `SERVER_JS` file whose text contains both `APP_VERSION =` and
+    `function doPost` (if there is only one `SERVER_JS` file, that one). It is replaced by the new `dist/Code.gs`;
+  - the **manifest** `appsscript` — replaced by the new `dist/appsscript.json` (if missing, it is added).
+- Every other file (your `Custom.gs`, HTML files) is sent back **unchanged**.
+
+Rules for the extra file:
+- Never edit the main code file: the next update overwrites it.
+- The extra file must **not** contain both `APP_VERSION =` and `function doPost`; otherwise the updater cannot tell
+  which file is the main one and the update stops with *"Could not find the DukanKaApp code file"*.
+- Per-shop manifest changes (extra scopes, libraries, time zone) are **lost** on update, because the manifest is
+  replaced by the one on GitHub. Keep custom code within the scopes the standard manifest already lists.
+- All files share one global scope. If `Custom.gs` defines a function with the same name as one in the main
+  file, the file loaded **later** (lower in the editor's file list) wins. New functions with new names
+  (e.g. a custom report function or an extra time trigger) are safe. Overriding a core function works but is fragile:
+  the core version may change in any update, so re-test that shop after each update (Audit tab, action `auto.update`).
+
+---
+
 ## Safety and data
 
-- All data lives in the owner's Google Drive.
+- All data lives in the owner's Google Drive. The one-link installer stores nothing about a shop in the developer's account:
+  the sheet and the script project are created in, and owned by, the shop owner's Google account.
 - Every night the whole sheet is copied into the Drive folder *DukanKaApp Backups*, and the last 30 copies are kept.
 - Wrong PINs are blocked after 5 tries for 10 minutes.
 - When the owner switches a user off, that phone is logged out.
 - Nothing is ever deleted. Corrections are new entries (for example *Cancel bill*), and every change is written to the *Audit* tab.
 - **Old years:** once a financial year is over, use **Settings → Archive old year** (owner). Its bills move to their own Google Sheet, so the main sheet stays fast. Old bills can still be searched from **Bills** by entering the year, for example `25-26`.
 - **Forgot the owner PIN:** in the sheet, use **Dukan App → Reset an owner PIN**.
+
+---
+
+## Data safety and leaving the app
+
+**If something goes wrong with the sheet**
+- Every night a full copy goes to Drive → *DukanKaApp Backups* (last 30 kept).
+- Google Sheets also keeps every change: File → Version history.
+- App → Settings → **Check my data** (or sheet menu Dukan App → Check my data) finds broken or repeated rows.
+- Sheet menu **Dukan App → Restore from a backup**: pick a nightly copy; the current state is saved first, the app link stays the same.
+- The tabs show a warning before anyone types in them by hand.
+
+**Moving to another app (Vyapar, Tally, Khatabook …)**
+- App → Settings → **Download all data (Excel)**: one file with every list, plus two ready tabs
+  ("For other apps – Parties" with each customer's balance, and "For other apps – Items" for stock in hand)
+  to paste into the other app's Excel import template.
+- The Google Sheet always belongs to the shop: File → Download → Microsoft Excel gives the raw data too.
+- Girvi, orders and repairs have no matching place in most billing apps; keep that Excel/PDF as the record.

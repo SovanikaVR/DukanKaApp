@@ -10,7 +10,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.4.0';
+var APP_VERSION = '1.5.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -90,6 +90,11 @@ var DEFAULT_SETTINGS = {
   cash_opening: '0',
   cash_opening_date: '',
   report_email: '',
+  live_city: '',
+  live_premium_pct: '9',
+  live_silver_pct: '',
+  live_city_adjust: '0',
+  live_goldapi_key: '',
   modules: JSON.stringify({
     girvi: true, sale: true, oldgold: true, orders: true, repair: true, stock: true,
     melt: true, wholesaler: true, karigar: true, cash: true, reports: true
@@ -106,7 +111,7 @@ var DEFAULT_SETTINGS = {
 var OWNER_ONLY = {
   'settings.save': 1, 'users.list': 1, 'users.save': 1, 'sale.void': 1, 'cash.opening': 1,
   'admin.archive': 1, 'admin.backupNow': 1, 'loans.edit': 1, 'loans.void': 1,
-  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'stock.update': 1, 'dues.adjust': 1
+  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'admin.check': 1, 'stock.update': 1, 'dues.adjust': 1
 };
 
 /* ===== 01_util.js ===== */
@@ -590,6 +595,7 @@ function usersSave_(user, d) {
  */
 function doPost(e) {
   var out;
+  finishInstall_(); // a shop made by the one-link installer finishes itself on first use (no-op afterwards)
   try {
     var body = json_(e && e.postData && e.postData.contents, {});
     out = { ok: true, data: handle_(body.action, body.token, body.data || {}) };
@@ -600,7 +606,10 @@ function doPost(e) {
 }
 
 /** Opening the web app link in a browser just shows that the backend is alive. */
-function doGet() {
+function doGet(e) {
+  finishInstall_();
+  var ready = installReadyPage_(e);
+  if (ready) return ready;
   var s = settings_();
   return ContentService.createTextOutput(JSON.stringify({
     ok: true, app: 'DukanKaApp', version: APP_VERSION, shop: s.shop_name
@@ -667,6 +676,8 @@ var ROUTES = {
   'repairs.edit': function (u, d) { return repairEdit_(u, d); },
   'cash.void': function (u, d) { return cashVoid_(u, d); },
   'home.summary': function () { return homeSummary_(); },
+  'rates.live': function () { return liveRates_(); },
+  'admin.check': function () { return checkData_(); },
   'sale.print': function (u, d) { return salePrint_(u, d); },
   'sale.export': function (u, d) { return saleExport_(d); },
   'export.list': function (u, d) { return exportList_(u, d); },
@@ -679,7 +690,7 @@ var READ_ONLY = {
   'sale.get': 1, 'oldgold.list': 1, 'loans.list': 1, 'loans.get': 1, 'orders.list': 1, 'orders.get': 1,
   'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'melt.list': 1, 'fine.summary': 1,
   'parties.list': 1, 'parties.ledger': 1, 'cash.list': 1, 'reports.daily': 1, 'reports.month': 1,
-  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1, 'sale.export': 1, 'export.list': 1
+  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1, 'rates.live': 1, 'admin.check': 1, 'sale.export': 1, 'export.list': 1
 };
 
 function handle_(action, token, data) {
@@ -753,7 +764,7 @@ function bumpDataVersion_() {
   try { CacheService.getScriptCache().put('dataver', String(Date.now()) + Math.random().toString(36).slice(2, 6), 21600); } catch (e) { /* ignore */ }
 }
 
-var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1 };
+var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1, 'admin.check': 1, 'rates.live': 1 };
 
 function cachedRead_(action, user, data, run) {
   if (NO_READ_CACHE[action]) return run();
@@ -2703,6 +2714,11 @@ function exportList_(user, d) {
         return [c.date, c.dir === 'in' ? 'In' : 'Out', c.mode === 'upi' ? 'UPI' : 'Cash', num_(c.amount), c.category, c.notes, c.by];
       })
     };
+  } else if (m === 'parties') {
+    out = {
+      title: 'Wholesalers & karigars', columns: ['Type', 'Name', 'Mobile', 'Gold (fine g) +we owe / −they hold', 'Cash ₹ +we owe', 'Notes'],
+      rows: partiesList_({}).map(function (p) { return [p.type === 'karigar' ? 'Karigar' : 'Wholesaler', p.name, p.mobile, p.goldG, p.cash, p.notes || '']; })
+    };
   } else if (m === 'customers') {
     var due = {};
     rows_('Dues').forEach(function (x) { due[x.customerId] = (due[x.customerId] || 0) + num_(x.amount); });
@@ -2718,6 +2734,62 @@ function exportList_(user, d) {
   return out;
 }
 
+/* ===== 18_live.js ===== */
+/* ---------- Live market rate (shown on Home; the shop can hide it) ----------
+ * Free sources, no key: world gold/silver price in US$ (api.gold-api.com) and US$ → ₹ (open.er-api.com).
+ * Indian price ≈ world price × ₹ rate × (1 + import duty %), per gram. Cities differ a little (local
+ * sarafa association, transport): the shop sets its city and a ± ₹ per 10 g difference once in Settings.
+ * Optional: a GoldAPI.io key (free plan) gives the ₹ price directly.
+ * Answers are kept for 15 minutes so the free services are called rarely.
+ */
+var OZ_G = 31.1034768;
+
+function fetchJson_(url, headers) {
+  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: headers || {}, followRedirects: true });
+  req_(res.getResponseCode() === 200, 'Live rate service did not answer (' + res.getResponseCode() + ')');
+  return JSON.parse(res.getContentText());
+}
+
+function liveRates_() {
+  var s = settings_();
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('live_rates');
+  var base = hit ? JSON.parse(hit) : null;
+  if (!base) {
+    var g24, ag, source, at = nowIso_();
+    if (s.live_goldapi_key) {
+      var hdr = { 'x-access-token': s.live_goldapi_key };
+      var gj = fetchJson_('https://www.goldapi.io/api/XAU/INR', hdr);
+      var sj = fetchJson_('https://www.goldapi.io/api/XAG/INR', hdr);
+      g24 = num_(gj.price_gram_24k); ag = num_(sj.price_gram_24k) || num_(sj.price) / OZ_G;
+      source = 'GoldAPI.io';
+    } else {
+      var xau = fetchJson_('https://api.gold-api.com/price/XAU');
+      var xag = fetchJson_('https://api.gold-api.com/price/XAG');
+      var fx = fetchJson_('https://open.er-api.com/v6/latest/USD');
+      var inr = num_(fx && fx.rates && fx.rates.INR);
+      req_(inr > 0 && num_(xau.price) > 0, 'Live rate not available right now');
+      g24 = num_(xau.price) * inr / OZ_G; ag = num_(xag.price) * inr / OZ_G;
+      source = 'gold-api.com + open.er-api.com';
+      at = xau.updatedAt || at;
+    }
+    base = { g24World: round2_(g24), agWorld: round2_(ag), source: source, at: at };
+    try { cache.put('live_rates', JSON.stringify(base), 900); } catch (e) { /* ignore */ }
+  }
+  // India price = world price + market difference % (import duty, GST, local premium; the shop can match it to its own city once).
+  var duty = s.live_premium_pct === '' || s.live_premium_pct === undefined ? 9 : num_(s.live_premium_pct);
+  var adj10 = num_(s.live_city_adjust);
+  var g24g = base.g24World * (s.live_goldapi_key ? 1 : 1 + duty / 100) + adj10 / 10;
+  var p22 = num_(s.purity_22k) || 91.6, p18 = num_(s.purity_18k) || 75;
+  var sDuty = s.live_silver_pct === '' || s.live_silver_pct === undefined ? duty : num_(s.live_silver_pct);
+  var agg = base.agWorld * (s.live_goldapi_key ? 1 : 1 + sDuty / 100);
+  return {
+    city: s.live_city || '', source: base.source, at: base.at, dutyPct: duty, silverPct: sDuty, cityAdjust10g: adj10,
+    g24: Math.round(g24g * 100) / 100, g22: Math.round(g24g * p22) / 100, g18: Math.round(g24g * p18) / 100, silver: Math.round(agg * 100) / 100,
+    per10: { g24: Math.round(g24g * 10), g22: Math.round(g24g * p22 / 10), g18: Math.round(g24g * p18 / 10) }, silverKg: Math.round(agg * 1000)
+  };
+}
+
 /* ===== 20_setup.js ===== */
 /* ---------- One-time setup, menu, nightly jobs, archive ---------- */
 
@@ -2730,6 +2802,8 @@ function onOpen() {
     .addItem('Back up now', 'backupNowMenu')
     .addItem('Email today\'s report now', 'emailReportNow')
     .addItem('Reset an owner PIN', 'resetOwnerPin')
+    .addItem('Check my data / डेटा जाँचें', 'checkDataMenu')
+    .addItem('Restore from a backup', 'restoreFromBackupMenu')
     .addSeparator()
     .addItem('Update now / अपडेट करें', 'updateNowMenu')
     .addItem('Auto-update on / off', 'toggleAutoUpdate')
@@ -2761,6 +2835,7 @@ function setupTabs_() {
   if (!existing.cash_opening_date) setSetting_('cash_opening_date', today_());
   var blank = ss_().getSheetByName('Sheet1');
   if (blank && ss_().getSheets().length > 1 && blank.getLastRow() === 0) ss_().deleteSheet(blank);
+  try { protectTabs_(); } catch (e) { /* ignore */ }
   PropertiesService.getScriptProperties().setProperty('tabs_version', APP_VERSION);
 }
 
@@ -3043,7 +3118,7 @@ function installerCreateShop(form) {
       setSetting_('shop_name', String(form.shopName).trim());
       try { ss_().rename(String(form.shopName).trim() + ' — DukanKaApp'); } catch (e) { /* name is cosmetic */ }
     }
-    if (form.mobile) setSetting_('shop_mobile', cleanMobile_(form.mobile));
+    if (form.mobile) setSetting_('shop_mobile', installMobile_(form.mobile));
     // The START tab from the template is not needed any more.
     var start = ss_().getSheetByName('START');
     if (start && ss_().getSheets().length > 1) ss_().deleteSheet(start);
@@ -3152,7 +3227,7 @@ function qrUrl_(text) {
   return 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=' + encodeURIComponent(text);
 }
 
-function cleanMobile_(m) {
+function installMobile_(m) {
   var d = String(m || '').replace(/\D/g, '');
   if (d.length === 12 && d.indexOf('91') === 0) d = d.slice(2);
   if (d.length === 11 && d.charAt(0) === '0') d = d.slice(1);
@@ -3163,7 +3238,7 @@ function cleanMobile_(m) {
 function checkInstallForm_(f) {
   if (!String(f.shopName || '').trim()) return 'दुकान का नाम लिखें। / Enter the shop name.';
   if (!String(f.ownerName || '').trim()) return 'अपना नाम लिखें। / Enter your name.';
-  if (!/^\d{10}$/.test(cleanMobile_(f.mobile))) return 'मोबाइल नंबर 10 अंकों का लिखें। / Mobile number should be 10 digits.';
+  if (!/^\d{10}$/.test(installMobile_(f.mobile))) return 'मोबाइल नंबर 10 अंकों का लिखें। / Mobile number should be 10 digits.';
   if (!/^[a-zA-Z0-9._-]{2,20}$/.test(String(f.loginName || '').trim())) {
     return 'लॉगिन नाम छोटा, अंग्रेज़ी अक्षरों में, बिना space (जैसे viju)। / Login name: English letters/numbers, no spaces (e.g. viju).';
   }
@@ -3648,6 +3723,381 @@ function installerHtml_(state) {
     'render();',
     '</script></body></html>'
   ].join('\n');
+}
+
+/* ===== 22_install_finish.js ===== */
+/* ---------- Finish a shop made by the one-link installer (installer/Code.gs) ---------- */
+/*
+ * The installer web app runs as the shop owner and:
+ *   - creates the shop's spreadsheet with ONE tab "Setup" (key | value rows: shop_name, shop_mobile,
+ *     shop_city, owner_name, owner_username, owner_salt, owner_pinHash, installed_by, installed_at,
+ *     and after deploying: webapp_url, deployment_id),
+ *   - creates this script project bound to it, uploads the code and deploys the web app.
+ * It cannot run this project's code (another OAuth client), so the first request that reaches
+ * this web app (normally the owner opening <exec url>?setup=1 right after pressing "Allow")
+ * finishes the shop here: tabs, settings, owner login, nightly trigger.
+ *
+ * Wiring (04_api.js): doGet and doPost call finishInstall_() first; doGet returns
+ * installReadyPage_(e) when it is not null.
+ */
+
+var P_INSTALL_DONE = 'install_done';       // '1' once the shop is finished (or never needed it)
+var P_INSTALL_DONE_AT = 'install_done_at'; // ms timestamp, limits how long the ?setup=1 page is served
+var READY_PAGE_HOURS = 48;                 // ?setup=1 serves the HTML page only this long after install
+
+/**
+ * Finishes an installer-made shop once. After that: one ScriptProperties read and return.
+ * Never throws: a failure is logged and the next request tries again.
+ */
+function finishInstall_() {
+  var props;
+  try {
+    props = PropertiesService.getScriptProperties();
+    if (props.getProperty(P_INSTALL_DONE) === '1') return;
+  } catch (e0) { console.error(e0); return; }
+
+  // Nothing to finish (hand-made shop that has no owner yet): don't look again for 5 minutes.
+  var cache = null;
+  try { cache = CacheService.getScriptCache(); if (cache.get('install_chk') === '1') return; } catch (e1) { cache = null; }
+
+  var lock = null;
+  try {
+    lock = LockService.getScriptLock();
+    if (typeof lock.tryLock === 'function') {
+      if (!lock.tryLock(30000)) return; // another request is finishing it right now
+    } else {
+      lock.waitLock(30000);
+    }
+  } catch (e2) { console.error(e2); return; }
+
+  try {
+    if (props.getProperty(P_INSTALL_DONE) === '1') return;
+    var setupSheet = ss_().getSheetByName('Setup');
+    if (setupSheet) {
+      if (!finishFromSetupSheet_(props, setupSheet) && cache) {
+        try { cache.put('install_chk', '1', 300); } catch (e5) { /* ignore */ }
+      }
+    } else if (finishHasOwner_()) {
+      // Shop set up by "Start here", the manual menu, or the tests: nothing to do, ever.
+      props.setProperty(P_INSTALL_DONE, '1');
+    } else if (cache) {
+      try { cache.put('install_chk', '1', 300); } catch (e3) { /* ignore */ }
+    }
+  } catch (e) {
+    console.error('finishInstall_: ' + (e && e.stack ? e.stack : e));
+  } finally {
+    try { lock.releaseLock(); } catch (e4) { /* ignore */ }
+  }
+}
+
+/** True when the Users tab exists and has an active owner. Never creates the tab. */
+function finishHasOwner_() {
+  if (!ss_().getSheetByName('Users')) return false;
+  return rows_('Users').some(function (u) { return u.role === 'owner' && u.active === 'true'; });
+}
+
+/** Reads the installer's "Setup" tab into { key: value } (all text). */
+function finishReadSetup_(sh) {
+  var out = {};
+  var last = sh.getLastRow();
+  if (last < 1) return out;
+  sh.getRange(1, 1, last, 2).getValues().forEach(function (r) {
+    var k = String(r[0] === undefined || r[0] === null ? '' : r[0]).trim();
+    if (k && k !== 'key') out[k] = String(r[1] === undefined || r[1] === null ? '' : r[1]).trim();
+  });
+  return out;
+}
+
+/** Returns true when the shop is finished, false when the Setup tab had no usable owner. */
+function finishFromSetupSheet_(props, setupSheet) {
+  var s = finishReadSetup_(setupSheet);
+
+  setupTabs_();
+
+  // Shop details. City goes into the address (printed on bills) when no address is set yet.
+  var cur = settings_();
+  var map = {};
+  if (s.shop_name) map.shop_name = s.shop_name;
+  if (s.shop_mobile) map.shop_mobile = s.shop_mobile;
+  if (s.shop_city && !cur.shop_address) map.shop_address = s.shop_city;
+  setSettings_(map);
+
+  // Owner login, made from the salt + hash the installer computed (the PIN itself was never stored).
+  var hasOwner = finishHasOwner_();
+  if (!hasOwner && s.owner_username && s.owner_salt && /^[0-9a-f]{64}$/.test(s.owner_pinHash || '')) {
+    var uname = String(s.owner_username).trim().toLowerCase();
+    if (!findUser_(uname)) {
+      insert_('Users', {
+        id: uid_('U'), name: s.owner_name || uname, username: uname, role: 'owner',
+        salt: s.owner_salt, pinHash: s.owner_pinHash, active: 'true', createdAt: nowIso_()
+      });
+      hasOwner = true;
+    }
+  }
+  if (!hasOwner) {
+    // Setup tab is broken: keep it so the owner (or "Start here") can still finish by hand.
+    console.error('finishInstall_: no owner in the Setup tab; left for "Start here"');
+    return false;
+  }
+
+  // Remember the deployment so "Show my app link", auto-update and "Update now" (21_install.js) work.
+  var url = finishGoodExecUrl_(s.webapp_url);
+  if (url) {
+    props.setProperty(P_WEBAPP_URL, url);
+    var depId = s.deployment_id || ((url.match(/\/s\/([\w-]+)\/exec$/) || [])[1] || '');
+    if (depId) props.setProperty(P_DEPLOYMENT, depId);
+    props.setProperty(P_SHEET_ID, ss_().getId());
+    props.setProperty(P_DEPLOYED_VERSION, APP_VERSION);
+  }
+
+  if (typeof installNightlyTrigger_ === 'function') {
+    try { installNightlyTrigger_(); } catch (e1) { console.error(e1); }
+  }
+  try {
+    audit_(null, 'install', APP_VERSION, { by: 'one-link installer', shop: s.shop_name || '', installedBy: s.installed_by || '' });
+  } catch (e2) { console.error(e2); }
+
+  if (url) finishEmailOwner_(url, s);
+
+  // The Setup tab holds the salt + PIN hash: remove it (setupTabs_ made the other tabs, so it is never the last one).
+  try {
+    if (ss_().getSheets().length > 1) ss_().deleteSheet(setupSheet);
+    else setupSheet.clear();
+  } catch (e3) { console.error(e3); }
+
+  props.setProperty(P_INSTALL_DONE_AT, String(Date.now()));
+  props.setProperty(P_INSTALL_DONE, '1');
+  return true;
+}
+
+/** A web app /exec URL (gmail or Workspace form), or ''. A /dev URL is never stored. */
+function finishGoodExecUrl_(url) {
+  url = String(url || '').trim();
+  return /^https:\/\/script\.google\.com\/(a\/macros\/[^\/]+|macros)\/s\/[\w-]+\/exec$/.test(url) ? url : '';
+}
+
+function finishAppLink_(url) {
+  return 'https://sovanikavr.github.io/DukanKaApp/?api=' + encodeURIComponent(url);
+}
+
+function finishQr_(text) {
+  return 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=' + encodeURIComponent(text);
+}
+
+function finishEsc_(s) {
+  return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+/** One email to the owner with the app link (this project already has the send_mail permission). */
+function finishEmailOwner_(url, s) {
+  try {
+    var to = Session.getEffectiveUser().getEmail() || s.installed_by;
+    if (!to) return;
+    var link = finishAppLink_(url);
+    MailApp.sendEmail({
+      to: to,
+      subject: (s.shop_name || 'DukanKaApp') + ' — app link / ऐप लिंक',
+      htmlBody: '<p style="font-size:16px">नमस्ते,</p>' +
+        '<p style="font-size:16px">आपकी दुकान का ऐप तैयार है। / Your shop app is ready.</p>' +
+        '<p style="font-size:18px"><a href="' + finishEsc_(link) + '">' + finishEsc_(link) + '</a></p>' +
+        '<p><img src="' + finishEsc_(finishQr_(link)) + '" width="240" height="240" alt="QR"></p>' +
+        '<p style="font-size:16px">लॉगिन नाम / Login name: <b>' + finishEsc_(s.owner_username) + '</b> ' +
+        '(PIN जो आपने चुना / the PIN you chose)</p>' +
+        '<p style="font-size:16px">फ़ोन पर Chrome में खोलें → ⋮ → "Add to Home screen"।</p>' +
+        '<p style="color:#666">यह लिंक सिर्फ़ अपनी दुकान के लोगों को दें। / Share this link only with your shop staff.</p>'
+    });
+  } catch (e) { console.error(e); }
+}
+
+/**
+ * <exec url>?setup=1 → the "your shop is ready" page (HtmlOutput). Anything else → null.
+ * Served only for READY_PAGE_HOURS after the install finished: every HtmlService page lets its
+ * visitor call this project's public functions through google.script.run, so the page is not
+ * left open for ever (the owner can always use the sheet menu "Show my app link").
+ */
+function installReadyPage_(e) {
+  if (!(e && e.parameter && e.parameter.setup === '1')) return null;
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var doneAt = Number(props.getProperty(P_INSTALL_DONE_AT) || 0);
+    if (!doneAt || Date.now() - doneAt > READY_PAGE_HOURS * 3600000) return null;
+
+    var url = finishGoodExecUrl_(props.getProperty(P_WEBAPP_URL));
+    if (!url) {
+      try { url = finishGoodExecUrl_(ScriptApp.getService().getUrl()); } catch (e1) { url = ''; }
+      if (url) {
+        props.setProperty(P_WEBAPP_URL, url);
+        if (!props.getProperty(P_DEPLOYMENT)) {
+          var m = url.match(/\/s\/([\w-]+)\/exec$/);
+          if (m) props.setProperty(P_DEPLOYMENT, m[1]);
+        }
+        if (!props.getProperty(P_SHEET_ID)) props.setProperty(P_SHEET_ID, ss_().getId());
+      }
+    }
+    if (!url) return null;
+
+    var shopName = '';
+    var owners = [];
+    try {
+      shopName = settings_().shop_name;
+      if (shopName === DEFAULT_SETTINGS.shop_name) shopName = '';
+      owners = rows_('Users').filter(function (u) { return u.role === 'owner' && u.active === 'true'; })
+        .map(function (u) { return u.username; });
+    } catch (e2) { /* page still shows the link */ }
+
+    var link = finishAppLink_(url);
+    var wa = 'https://wa.me/?text=' + encodeURIComponent((shopName || 'DukanKaApp') + ' — दुकान का ऐप / shop app:\n' + link);
+    return HtmlService.createHtmlOutput(installReadyHtml_(shopName, owners, link, wa))
+      .setTitle('DukanKaApp — तैयार / Ready')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  } catch (e) {
+    console.error(e);
+    return null;
+  }
+}
+
+function installReadyHtml_(shopName, owners, link, wa) {
+  var L = finishEsc_(link);
+  return [
+    '<!DOCTYPE html><html><head><meta charset="utf-8"><base target="_top">',
+    '<style>',
+    'body{margin:0;background:#F5F7F9;color:#15202B;font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Devanagari",sans-serif;font-size:17px;line-height:1.5}',
+    'header{background:#1F3A5F;color:#fff;padding:18px 16px;border-bottom:4px solid #C9962B}',
+    'header h1{margin:0;font-size:22px}header p{margin:4px 0 0;color:#E8D3A2;font-size:15px}',
+    'main{max-width:520px;margin:0 auto;padding:16px}',
+    '.en{color:#4A5763;font-size:14px}',
+    '.card{background:#fff;border:1px solid #DCE2E8;border-radius:14px;padding:16px;margin:0 0 14px}',
+    '.ok{background:#E7F3EC;border-color:#1E6B45;color:#1E6B45;font-weight:bold;font-size:19px}',
+    '.btn{display:block;box-sizing:border-box;width:100%;margin:10px 0;padding:16px;border-radius:12px;font-size:18px;font-weight:bold;text-align:center;text-decoration:none;color:#fff;background:#1F3A5F}',
+    '.btn.gold{background:#C9962B;color:#15202B}.btn.wa{background:#1E6B45}',
+    '.qr{text-align:center}.qr img{width:240px;height:240px;border:1px solid #DCE2E8;border-radius:8px;background:#fff}',
+    '.login{background:#FBF4E4;border:1px solid #E8D3A2;color:#5B4300}',
+    'textarea{width:100%;box-sizing:border-box;font-size:13px;height:80px;border:1px solid #C3CCD5;border-radius:8px;padding:8px}',
+    'ol{padding-left:22px}li{margin:6px 0}',
+    '</style></head><body>',
+    '<header><h1>DukanKaApp</h1><p>' + finishEsc_(shopName || '') + '</p></header>',
+    '<main>',
+    '<div class="card ok">✅ आपकी दुकान तैयार है!<br><span class="en">Your shop is ready.</span></div>',
+    '<a class="btn gold" href="' + L + '">ऐप खोलें<br><span style="font-size:14px">Open the app</span></a>',
+    '<div class="card qr"><b>दुकान के फ़ोन से QR स्कैन करें</b><br><span class="en">Scan with the shop phone</span><br><br>',
+    '<img src="' + finishEsc_(finishQr_(link)) + '" alt="QR"></div>',
+    '<a class="btn wa" href="' + finishEsc_(wa) + '">WhatsApp पर भेजें / Send on WhatsApp</a>',
+    '<div class="card login"><b>लॉगिन नाम / Login name: ' + finishEsc_(owners.join(', ')) + '</b><br>',
+    'PIN — जो आपने चुना। <span class="en">PIN: the one you chose.</span></div>',
+    '<div class="card"><b>आगे / Next</b><ol>',
+    '<li>फ़ोन पर लिंक <b>Chrome</b> में खोलें → ⋮ → <b>Add to Home screen</b>।<br><span class="en">Open in Chrome → ⋮ → Add to Home screen.</span></li>',
+    '<li>लॉगिन नाम और PIN से लॉगिन करें।<br><span class="en">Log in with your login name and PIN.</span></li>',
+    '<li>कर्मचारी: ऐप में <b>Settings → Users</b>, फिर उन्हें यही लिंक भेजें।<br><span class="en">Staff: add them in Settings → Users and send them this link.</span></li>',
+    '</ol><p class="en">यह लिंक आपके ईमेल पर भी भेज दिया है। / This link was also emailed to you.</p></div>',
+    '<div class="card"><b>लिंक / Link</b><textarea readonly onclick="this.select()">' + L + '</textarea>',
+    '<p class="en">यह लिंक सिर्फ़ अपनी दुकान के लोगों को दें। / Share this link only with your shop staff.</p></div>',
+    '</main></body></html>'
+  ].join('\n');
+}
+
+/* ===== 23_safety.js ===== */
+/* ---------- Keeping the data safe: health check, guard against hand edits, restore from a backup ----------
+ * Three layers protect the shop's data:
+ *   1. Every night a full copy of the sheet goes to Drive → "DukanKaApp Backups" (last 30 kept).
+ *   2. Google Sheets keeps its own version history (File → Version history) for every change.
+ *   3. Tabs warn before anyone types in them by hand, and "Check my data" finds broken rows early.
+ * "Restore from a backup" copies all tabs from a chosen nightly copy back into this sheet
+ * (after first saving the current state as one more backup), so the app link stays the same.
+ */
+
+/** Tabs show a warning (not a block) when someone edits them by hand in Google Sheets. */
+function protectTabs_() {
+  Object.keys(SCHEMA).forEach(function (name) {
+    var sh = ss_().getSheetByName(name);
+    if (!sh) return;
+    try {
+      if (!sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).length) {
+        sh.protect().setDescription('DukanKaApp data — change it from the app').setWarningOnly(true);
+      }
+    } catch (e) { /* not allowed or not supported: fine */ }
+  });
+}
+
+/** Looks for problems: missing or repeated ids, broken bill lines, wrong header rows. */
+function checkData_() {
+  var problems = [];
+  Object.keys(SCHEMA).forEach(function (name) {
+    var sh = ss_().getSheetByName(name);
+    if (!sh) { problems.push(name + ': tab is missing (it will be made again)'); return; }
+    var headers = SCHEMA[name];
+    var cur = sh.getRange(1, 1, 1, headers.length).getValues()[0];
+    headers.forEach(function (h, i) { if (String(cur[i]) !== h) problems.push(name + ': column ' + (i + 1) + ' should be "' + h + '" but is "' + cur[i] + '"'); });
+    if (name === 'Audit' || name === 'Settings') return;
+    var seen = {};
+    rows_(name).forEach(function (r) {
+      var id = r[headers[0]];
+      if (!id) problems.push(name + ' row ' + r._row + ': no id');
+      else if (seen[id]) problems.push(name + ' rows ' + seen[id] + ' and ' + r._row + ': same id ' + id);
+      else seen[id] = r._row;
+    });
+  });
+  rows_('Sales').forEach(function (b) {
+    try { JSON.parse(b.lines || '[]'); } catch (e) { problems.push('Sales row ' + b._row + ' (' + b.billNo + '): item lines are damaged'); }
+  });
+  return { ok: !problems.length, problems: problems.slice(0, 50), count: problems.length, checkedAt: nowIso_() };
+}
+
+/** Menu: Check my data. */
+function checkDataMenu() {
+  var r = checkData_();
+  SpreadsheetApp.getUi().alert(r.ok ? 'सब ठीक है / Everything looks fine.' :
+    'Problems found (' + r.count + '):\n\n' + r.problems.join('\n') + '\n\nUse "Restore from a backup" if data was damaged, or ask for help.');
+}
+
+/** Menu: Restore from a backup. Lists the nightly copies; the owner types the number to restore. */
+function restoreFromBackupMenu() {
+  var ui = SpreadsheetApp.getUi();
+  var folders = DriveApp.getFoldersByName('DukanKaApp Backups');
+  if (!folders.hasNext()) { ui.alert('No backups found yet. They are made every night (Dukan App → Back up now makes one now).'); return; }
+  var files = [];
+  var it = folders.next().getFiles();
+  while (it.hasNext()) files.push(it.next());
+  files.sort(function (a, b) { return b.getDateCreated() - a.getDateCreated(); });
+  files = files.slice(0, 15);
+  if (!files.length) { ui.alert('No backups found yet.'); return; }
+  var list = files.map(function (f, i) { return (i + 1) + '. ' + f.getName(); }).join('\n');
+  var r = ui.prompt('Restore from a backup', 'Which copy? Type its number:\n\n' + list +
+    '\n\nThe data as it is now is saved as one more backup first.', ui.ButtonSet.OK_CANCEL);
+  if (r.getSelectedButton() !== ui.Button.OK) return;
+  var n = parseInt(r.getResponseText(), 10);
+  if (!(n >= 1 && n <= files.length)) { ui.alert('Please type a number from the list.'); return; }
+  var sure = ui.alert('Restore "' + files[n - 1].getName() + '"?', 'Everything entered after that copy will be replaced by the copy.', ui.ButtonSet.YES_NO);
+  if (sure !== ui.Button.YES) return;
+  var res = restoreFrom_(files[n - 1].getId());
+  ui.alert('Restored ' + res.tabs + ' tabs from "' + files[n - 1].getName() + '".\nThe app shows the restored data now.');
+}
+
+/** Copies every app tab from a backup spreadsheet into this one. */
+function restoreFrom_(fileId) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    backupNow_(); // keep the present state too, in case the wrong copy was picked
+    var src = SpreadsheetApp.openById(fileId);
+    var tabs = 0;
+    Object.keys(SCHEMA).forEach(function (name) {
+      var from = src.getSheetByName(name);
+      if (!from) return;
+      var to = sheet_(name);
+      var vals = from.getDataRange().getValues();
+      var width = SCHEMA[name].length;
+      vals = vals.map(function (row) { var r = row.slice(0, width); while (r.length < width) r.push(''); return r.map(function (v) { return toCell_(v); }); });
+      to.getRange(1, 1, Math.max(to.getLastRow(), 1), Math.max(to.getLastColumn(), width)).clearContent();
+      if (vals.length) to.getRange(1, 1, vals.length, width).setValues(vals);
+      tabs++;
+    });
+    _rowsCache = {};
+    bumpDataVersion_();
+    audit_(null, 'restore', fileId, { tabs: tabs });
+    return { tabs: tabs };
+  } finally { lock.releaseLock(); }
 }
 
 /* ===== shared/calc.js ===== */

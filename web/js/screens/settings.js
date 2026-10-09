@@ -20,7 +20,7 @@ const DEFAULTS = {
 };
 const MODULES = [['girvi', 'Girvi loans'], ['sale', 'Sales & bills'], ['oldgold', 'Buy old gold'], ['orders', 'Orders'],
   ['repair', 'Repair'], ['stock', 'Stock'], ['melt', 'Melting'], ['wholesaler', 'Wholesaler'], ['karigar', 'Karigar'],
-  ['cash', 'Cash book'], ['reports', 'Reports']];
+  ['cash', 'Cash book'], ['reports', 'Reports'], ['liverate', 'Live market rate on Home']];
 
 export async function render() {
   const thermal = (() => { try { return localStorage.getItem('dk_thermal') || '58'; } catch (e) { return '58'; } })();
@@ -44,6 +44,8 @@ export async function render() {
     f('interest_default_rate', 'Girvi ₹ per 100 / month', 'num'), f('interest_min_days', 'Girvi minimum days', 'num'),
     f('purity_24k', '24K purity %', 'num'), f('purity_22k', '22K purity %', 'num'), f('purity_18k', '18K purity %', 'num'),
     f('report_email', 'Send nightly report to (email)')];
+  const live = [f('live_city', 'City (e.g. Nanded)'), f('live_premium_pct', 'Market difference % over world price', 'num'),
+    f('live_city_adjust', 'City difference ₹ per 10 g (+ or −)'), f('live_goldapi_key', 'GoldAPI.io key (optional, free plan)')];
 
   /* ---- Bill design ---- */
   const bf = (key, label, type) => f(key, label, type);
@@ -149,7 +151,7 @@ export async function render() {
 
   const save = h('button', { class: 'btn', onclick: () => busy(save, async () => {
     const data = {};
-    [...shop, ...std, ...gstHead, ...quoteHead, mkPct, ...silver].forEach((el) => { data[el.key] = el.input.value.trim(); });
+    [...shop, ...std, ...gstHead, ...quoteHead, mkPct, ...silver, ...live].forEach((el) => { data[el.key] = el.input.value.trim(); });
     Object.assign(data, { bill_lang: billLang, bill_rate_unit: rateUnit, making_default_type: mkType, oldgold_rcm: rcm ? 'true' : 'false',
       bill_fields_gst: JSON.stringify(gstFields.state), bill_fields_quote: JSON.stringify(quoteFields.state) });
     ['shop_logo', 'quote_logo'].forEach((k) => { if (logos[k] !== undefined) data[k] = logos[k]; });
@@ -185,6 +187,15 @@ export async function render() {
     if (v) await busy(null, async () => { const r = await call('admin.archive', { fy: v.fy }); toast(r.moved + ' bills moved'); });
   };
   const backup = async () => busy(null, async () => { const r = await call('admin.backupNow'); toast('Backup saved: ' + r.name); });
+  const check = async () => busy(null, async () => {
+    const r = await call('admin.check');
+    toast(r.ok ? t('Everything looks fine') : r.count + ' ' + t('problems found — see the list'), r.ok ? 'ok' : 'err');
+    if (!r.ok) await ask(t('Check my data'), [{ key: 'x', label: r.problems.join('\n'), type: 'textarea', value: t('To undo damage: Google Sheet → Dukan App → Restore from a backup') }], t('OK'));
+  });
+  const everything = async () => busy(null, async () => {
+    const { exportEverything } = await import('./exports.js');
+    await exportEverything();
+  }, 'Making the file…');
 
   return screen(t('Settings'), 'Owner only', [
     sec('SHOP DETAILS · printed on every bill'), card(shop[0], shop[1], grid(2, shop[2], shop[4]), shop[3], gstSeg, shop[5]),
@@ -200,6 +211,8 @@ export async function render() {
     card(h('div', { class: 'f' }, h('span', { class: 'lbl' }, t('Making on new bills')), mkSeg), grid(3, mkPct, ...silver)),
     card(h('div', { class: 'f' }, h('span', { class: 'lbl' }, t('Old gold bought from customers')), rcmSeg),
       h('div', { class: 'hint' }, t('In an exchange, GST is charged on the full price of the new jewellery (old gold is not deducted before GST). Gold bought from a private person is normally not taxed; confirm with your CA.'))),
+    sec('LIVE MARKET RATE'), card(grid(2, live[0], live[1]), live[2], live[3],
+      h('div', { class: 'hint' }, t('Free world gold price × today\'s US$ rate × the market difference. On Home, "Match my city rate" sets the difference from your own 24K rate, so the live rate follows your city. Hide it in Modules.'))),
     sec('MODULES · switch off what this shop does not use'), card(modBoxes, h('div', { class: 'hint' }, 'Switched-off modules hide from the app; their data stays safe.')),
     sec('FORMULAS · old entries keep the formula they were made with'), formulaEls,
     sec('USERS'), card(users.map(userRow), h('button', { class: 'btn2 small', onclick: addUser }, '+ Add user')),
@@ -207,6 +220,9 @@ export async function render() {
     sec('DATA'), card(h('div', { class: 'hint' }, 'Shop link: ' + apiUrl()),
       h('div', { class: 'grid g2' }, h('button', { class: 'btn2 small', onclick: backup }, 'Back up now'),
         h('button', { class: 'btn2 small', onclick: archive }, 'Archive old year')),
+      h('button', { class: 'btn2 small', onclick: everything }, '⬇ ' + t('Download all data (Excel)')),
+      h('button', { class: 'btn2 small', onclick: check }, t('Check my data')),
+      h('div', { class: 'hint' }, t('One Excel file with every list (customers, baki, bills, girvi, orders, repairs, old gold, stock, cash, wholesalers/karigars) plus ready tabs to import parties and items into another app like Vyapar. Your Google Sheet itself is also yours: File → Download → Excel.')),
       h('a', { class: 'link', href: '#/connect' }, 'Change shop link'))
   ], save);
 }

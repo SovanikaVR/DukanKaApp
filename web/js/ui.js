@@ -218,7 +218,7 @@ export function field(label, opts = {}) {
   else {
     if (opts.type === 'num') { Object.assign(attrs, { inputmode: 'decimal', type: 'text', autocomplete: 'off' }); if (opts.min0 !== false) opts.min0 = true; }
     else if (opts.type === 'tel') Object.assign(attrs, { inputmode: 'tel', type: 'tel', autocomplete: 'off' });
-    else if (opts.type === 'date') attrs.type = 'date';
+    else if (opts.type === 'date') return dateField_(label, attrs, opts);
     else if (opts.type === 'pin') Object.assign(attrs, { inputmode: 'numeric', type: 'password', autocomplete: 'current-password' });
     else attrs.type = 'text';
     input = h('input', attrs);
@@ -228,6 +228,61 @@ export function field(label, opts = {}) {
   if (opts.min0) input.addEventListener('input', () => { if (/-/.test(input.value)) input.value = input.value.replace(/-/g, ''); });
   if (opts.max !== undefined) input.addEventListener('input', () => { if (num(input.value) > opts.max) input.value = String(opts.max); });
   wrap.input = input;
+  return wrap;
+}
+
+/* ---------- dates always shown as dd/mm/yyyy ----------
+ * The phone's own date box shows mm/dd/yyyy on many phones (English-US setting). This box shows dd/mm/yyyy,
+ * accepts typing (09/10/2026, 9-10-26, 09102026) and has a calendar button.
+ * Code still reads and sets .value as yyyy-mm-dd, as before. */
+const VALUE = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+function isoOf(y, m, d) {
+  y = +y; m = +m; d = +d;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (!y || dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+}
+export function parseDate(s) {
+  s = String(s || '').trim();
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  if (m) return isoOf(m[1], m[2], m[3]);
+  m = /^(\d{1,2})[/.\- ](\d{1,2})[/.\- ](\d{2}|\d{4})$/.exec(s);
+  if (m) return isoOf(m[3].length === 2 ? '20' + m[3] : m[3], m[2], m[1]);
+  if (/^\d{8}$/.test(s)) return isoOf(s.slice(4), s.slice(2, 4), s.slice(0, 2));
+  return null;
+}
+export const showDate = (iso) => (iso ? String(iso).slice(0, 10).split('-').reverse().join('/') : '');
+
+function dateField_(label, attrs, opts) {
+  const text = h('input', { class: 'inp date-txt', type: 'text', inputmode: 'numeric', placeholder: 'dd/mm/yyyy', autocomplete: 'off',
+    id: attrs.id, readonly: attrs.readonly });
+  const native = h('input', { type: 'date', class: 'date-native', tabindex: '-1', 'aria-hidden': 'true' });
+  let iso = '';
+  Object.defineProperty(text, 'value', {
+    configurable: true,
+    get() { return iso; },
+    set(v) { iso = parseDate(v) || ''; VALUE.set.call(text, showDate(iso)); VALUE.set.call(native, iso); }
+  });
+  text.addEventListener('input', () => {
+    const raw = VALUE.get.call(text);
+    const p = parseDate(raw);
+    if (p) { iso = p; VALUE.set.call(native, iso); } else if (!raw.trim()) iso = '';
+  });
+  text.addEventListener('blur', () => VALUE.set.call(text, showDate(iso)));
+  native.addEventListener('change', () => {
+    iso = VALUE.get.call(native) || iso;
+    VALUE.set.call(text, showDate(iso));
+    text.dispatchEvent(new Event('input', { bubbles: true }));
+    text.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  if (attrs.oninput) text.addEventListener('input', attrs.oninput);
+  if (attrs.onchange) text.addEventListener('change', attrs.onchange);
+  text.value = attrs.value || '';
+  const box = h('div', { class: 'date-box' }, text,
+    attrs.readonly ? null : h('span', { class: 'date-btn', title: t('Calendar') }, icon('calendar', 20), native));
+  const wrap = h('label', { class: 'f' + (opts.cls ? ' ' + opts.cls : '') }, h('span', { class: 'lbl' }, label), box,
+    opts.hint ? h('span', { class: 'fhint' }, opts.hint) : null);
+  wrap.input = text;
   return wrap;
 }
 
@@ -265,11 +320,11 @@ export function empty(text) { return h('div', { class: 'empty' }, text); }
 
 /* ---------- friendly waiting: a spinning gold coin and a useful tip ---------- */
 const TIPS = {
-  en: ['22K gold is 91.6% pure; 18K is 75%.', '1 tola is about 11.66 grams.', 'Tap ? on any screen to see how it works.',
+  en: ['22K gold is 91.6% pure; 18K is 75%.', 'Gold rate is quoted per 10 g = 1 tola in the market.', 'Tap ? on any screen to see how it works.',
     'Baki list shows everyone who still has to pay.', 'Tap ⬇ on a list to get it in Excel or PDF.', 'Same rate as yesterday? One tap on the rate screen.',
     'Bills → Export: every bill of a month in one PDF.', 'Girvi interest is counted day by day.', 'HUID on hallmarked jewellery has 6 letters/numbers.',
     'Making can be ₹ per gram, % or one fixed amount.', 'Switch off parts you don\'t use in Settings → Modules.', 'Your data stays in your own Google Sheet.'],
-  hi: ['22 कैरेट सोना 91.6% शुद्ध होता है; 18 कैरेट 75%।', '1 तोला लगभग 11.66 ग्राम होता है।', 'किसी भी स्क्रीन पर ? दबाकर मदद देखें।',
+  hi: ['22 कैरेट सोना 91.6% शुद्ध होता है; 18 कैरेट 75%।', 'सोने का भाव 10 ग्राम (1 तोला) के हिसाब से बोला जाता है।', 'किसी भी स्क्रीन पर ? दबाकर मदद देखें।',
     'बाकी लिस्ट में सबकी बाकी एक जगह दिखती है।', 'लिस्ट पर ⬇ दबाकर Excel या PDF लें।', 'भाव कल जैसा है? भाव स्क्रीन पर एक बटन दबाएँ।',
     'बिल → एक्सपोर्ट: महीने के सारे बिल एक PDF में।', 'गिरवी का ब्याज दिन के हिसाब से लगता है।', 'हॉलमार्क गहने पर HUID 6 अक्षर/अंक का होता है।',
     'मेकिंग ₹ प्रति ग्राम, % या एक फिक्स रकम हो सकती है।', 'जो हिस्से नहीं चाहिए उन्हें सेटिंग → मॉड्यूल में बंद करें।', 'आपका डेटा आपकी अपनी Google Sheet में रहता है।']
@@ -317,6 +372,7 @@ const ICONS = {
   user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
   logout: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
   camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 10a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z',
+  calendar: 'M4 6h16v14H4zM4 10h16M8 3v5M16 3v5',
   help: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01',
   rupee: 'M6 4h12M6 9h12M6 4c6 0 8 2 8 5s-3 5-8 5l8 7',
   edit: 'M4 20h4L19 9l-4-4L4 16zM14 6l4 4',

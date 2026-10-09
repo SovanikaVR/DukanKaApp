@@ -4,12 +4,14 @@ import { S, setting, isViewer } from '../state.js';
 import { h, screen, field, card, grid, busy, toast, num, inr, fdate, go } from '../ui.js';
 import { t } from '../i18n.js';
 
-export async function render() {
+export async function render(params, query = {}) {
   const r = S.rate || {};
-  const g24 = field('24K (fine)', { type: 'num', value: r.g24 || '' });
-  const g22 = field('22K', { type: 'num', value: r.g22 || '' });
-  const g18 = field('18K', { type: 'num', value: r.g18 || '' });
-  const ag = field('Fine silver', { type: 'num', value: r.silver || '' });
+  // "Use the market rate" on Home opens this screen already filled with the live rate.
+  const q = (k, v) => (query[k] ? query[k] : v || '');
+  const g24 = field('24K (fine)', { type: 'num', value: q('g24', r.g24) });
+  const g22 = field('22K', { type: 'num', value: q('g22', r.g22) });
+  const g18 = field('18K', { type: 'num', value: q('g18', r.g18) });
+  const ag = field('Fine silver', { type: 'num', value: q('ag', r.silver) });
   g24.input.setAttribute('autofocus', '');
   // A 22K / 18K rate the shop set by hand today is kept when 24K is changed.
   const auto = (p) => Math.round(num(r.g24) * num(p) / 100);

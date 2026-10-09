@@ -9,6 +9,8 @@ function onOpen() {
     .addItem('Back up now', 'backupNowMenu')
     .addItem('Email today\'s report now', 'emailReportNow')
     .addItem('Reset an owner PIN', 'resetOwnerPin')
+    .addItem('Check my data / डेटा जाँचें', 'checkDataMenu')
+    .addItem('Restore from a backup', 'restoreFromBackupMenu')
     .addSeparator()
     .addItem('Update now / अपडेट करें', 'updateNowMenu')
     .addItem('Auto-update on / off', 'toggleAutoUpdate')
@@ -40,6 +42,7 @@ function setupTabs_() {
   if (!existing.cash_opening_date) setSetting_('cash_opening_date', today_());
   var blank = ss_().getSheetByName('Sheet1');
   if (blank && ss_().getSheets().length > 1 && blank.getLastRow() === 0) ss_().deleteSheet(blank);
+  try { protectTabs_(); } catch (e) { /* ignore */ }
   PropertiesService.getScriptProperties().setProperty('tabs_version', APP_VERSION);
 }
 
