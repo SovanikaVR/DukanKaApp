@@ -7,7 +7,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.2.0';
+var APP_VERSION = '1.3.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -19,7 +19,7 @@ var SCHEMA = {
     'makingPerG', 'costTotal', 'status', 'source', 'sourceId', 'soldBillId', 'addedAt', 'by'],
   Sales: ['id', 'billNo', 'type', 'fy', 'date', 'customerId', 'customerName', 'mobile', 'village',
     'lines', 'oldGold', 'gstPct', 'subtotal', 'tax', 'roundOff', 'invoiceTotal', 'oldValue', 'net',
-    'cash', 'upi', 'udhaar', 'costTotal', 'status', 'by', 'at'],
+    'cash', 'upi', 'udhaar', 'costTotal', 'status', 'by', 'at', 'notes', 'printOpts'],
   OldGold: ['id', 'date', 'customerId', 'customerName', 'source', 'billId', 'item', 'metal', 'weight',
     'cutPct', 'customerFine', 'rate', 'amount', 'ourPurityPct', 'ourFine', 'status', 'meltId', 'by', 'at'],
   Loans: ['id', 'date', 'customerId', 'customerName', 'mobile', 'item', 'metal', 'purityPct',
@@ -54,6 +54,28 @@ var DEFAULT_SETTINGS = {
   gst_default_pct: '3',
   hsn_code: '7113',
   bill_terms: '',
+  shop_tagline: '',
+  shop_phones: '',
+  bis_licence: '',
+  shop_logo: '',
+  quote_title: 'QUOTATION',
+  quote_shop_name: '',
+  quote_tagline: '',
+  quote_address: '',
+  quote_phones: '',
+  quote_logo: '',
+  quote_footer: '',
+  bill_lang: 'en',
+  bill_rate_unit: '10g',
+  bill_fields_gst: JSON.stringify({ billNo: true, gross: true, net: true, purity: true, purityInName: false, hsn: true, huid: false,
+    rate: true, making: true, makingAmt: false, metalValue: false, words: true, payment: true, oldGold: true, sign: true }),
+  bill_fields_quote: JSON.stringify({ billNo: true, gross: true, net: true, purity: false, purityInName: false, hsn: false, huid: false,
+    rate: true, making: true, makingAmt: false, metalValue: false, words: false, payment: true, oldGold: true, sign: true }),
+  making_default_type: 'perg',
+  making_default_pct: '',
+  making_default_silver: '0',
+  purity_silver: '100',
+  oldgold_rcm: 'false',
   making_default_per_g: '150',
   standard_cut_pct: '20',
   standard_purity_pct: '80',

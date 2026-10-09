@@ -18,6 +18,7 @@ const ROUTES = [
   ['sale', () => import('./screens/sale.js'), 'render'],
   ['bill/:id', () => import('./screens/billview.js'), 'render'],
   ['bills', () => import('./screens/billview.js'), 'list'],
+  ['bills-export', () => import('./screens/exports.js'), 'bills'],
   ['oldgold', () => import('./screens/oldgold.js'), 'render'],
   ['loans', () => import('./screens/loans.js'), 'list'],
   ['loan-new', () => import('./screens/loans.js'), 'create'],
@@ -109,7 +110,7 @@ async function render() {
 
 /** Something failed while opening a screen: say it simply and offer Try again. */
 const MODULE_OF = {
-  sale: 'sale', bills: 'sale', 'bill/:id': 'sale', oldgold: 'oldgold', loans: 'girvi', 'loan-new': 'girvi', 'loan/:id': 'girvi',
+  sale: 'sale', bills: 'sale', 'bills-export': 'sale', 'bill/:id': 'sale', oldgold: 'oldgold', loans: 'girvi', 'loan-new': 'girvi', 'loan/:id': 'girvi',
   orders: 'orders', 'order-new': 'orders', 'order/:id': 'orders', repairs: 'repair', 'repair-new': 'repair', 'repair/:id': 'repair',
   stock: 'stock', 'stock-add': 'stock', melt: 'melt', cash: 'cash', reports: 'reports'
 };
@@ -151,7 +152,7 @@ window.addEventListener('unhandledrejection', (ev) => {
 });
 
 const ACTIVE = {
-  'bill/:id': 'bills', 'loan-new': 'loans', 'loan/:id': 'loans', 'order-new': 'orders', 'order/:id': 'orders',
+  'bill/:id': 'bills', 'bills-export': 'bills', 'loan-new': 'loans', 'loan/:id': 'loans', 'order-new': 'orders', 'order/:id': 'orders',
   'repair-new': 'repairs', 'repair/:id': 'repairs', 'stock-add': 'stock', 'rate': 'home', 'search': 'home',
   'customer/:id': 'home', 'customer-edit/:id': 'home', 'help/:topic': 'help'
 };

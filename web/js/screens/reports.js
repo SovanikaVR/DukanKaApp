@@ -42,7 +42,8 @@ async function today(dateQ) {
       kvRow('Bills', d.sales.count + ' (' + d.sales.gst + ' GST) · ' + inr(d.sales.total)),
       modOn('girvi') ? kvRow('New girvi', d.loans.newCount + ' · ' + inr(d.loans.newAmount) + ' · released ' + d.loans.closed) : null,
       modOn('oldgold') ? kvRow('Old gold bought', g3(d.oldGold.weight) + ' g' + (d.oldGold.silverWeight ? ' + ' + t('silver') + ' ' + g3(d.oldGold.silverWeight) + ' g' : '') + ' · ' + inr(d.oldGold.amount)) : null,
-      modOn('orders') ? kvRow('Orders booked / delivered', d.orders.booked + ' / ' + d.orders.delivered) : null),
+      modOn('orders') ? kvRow('Orders booked / delivered', d.orders.booked + ' / ' + d.orders.delivered) : null,
+      d.rcm ? kvRow('GST on old gold bought (reverse charge 3%)', inr(d.rcm.gst, 2)) : null),
     h('div', { class: 'grid g2' },
       h('button', { class: 'btn', onclick: () => sharePdf(html(), 'report-' + date + '.pdf', S.settings.shop_name + ' report ' + fdate(date)).catch((e) => toast(e.message, 'err')) }, 'Share on WhatsApp'),
       h('button', { class: 'btn2', onclick: () => downloadPdf(html(), 'report-' + date + '.pdf').catch((e) => toast(e.message, 'err')) }, 'Download PDF')));

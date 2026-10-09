@@ -305,6 +305,38 @@ test('QA round: money stays consistent in the tricky cases', () => {
   assert.strictEqual(ok('reports.daily', {}, T).profit !== null, true);
 });
 
+test('bills like the sample: making %, gross weight, own bill no, note, print options, exports', () => {
+  const c = ok('customers.save', { firstName: 'Amol', lastName: 'Nimkar', mobile: '9970691198' }, T);
+  // Sample tax invoice: 3.930 g × ₹1,51,900 per 10 g, making 5.5 % → 62,980.02 + CGST 944.70 + SGST 944.70 = 64,869
+  const b = ok('sale.create', { type: 'GST', customerId: c.id, gstPct: 3, notes: 'Latkan jod, 2 pcs',
+    lines: [{ name: 'Latkan Jod', weight: 3.93, grossWt: 3.93, rate: 15190, makingType: 'pct', makingPct: 5.5, purityPct: 91.6 }],
+    cash: 0, upi: 64869, billNo: 'IS/73', printOpts: { purity: true } }, T);
+  assert.strictEqual(b.lines[0].amount, 62980.02);
+  assert.strictEqual(b.tax, 1889.4);
+  assert.strictEqual(b.invoiceTotal, 64869);
+  assert.strictEqual(b.billNo, 'IS/73');
+  assert.strictEqual(b.notes, 'Latkan jod, 2 pcs');
+  assert.ok(/already used/.test(call('sale.create', { type: 'GST', customerId: c.id, lines: [{ name: 'X', weight: 1, rate: 100 }], cash: 103, billNo: 'is/73' }, T).error));
+  assert.ok(/Gross weight/.test(call('sale.create', { type: 'EST', customerId: c.id, lines: [{ name: 'X', weight: 2, grossWt: 1, rate: 100 }], cash: 200 }, T).error));
+  // fixed making for the piece
+  const f = ok('sale.create', { type: 'EST', customerId: c.id, lines: [{ name: 'Payal', metal: 'silver', weight: 50, rate: 190, makingType: 'fixed', makingFixed: 500 }], cash: 10000 }, T);
+  assert.strictEqual(f.lines[0].making, 500);
+  assert.strictEqual(f.shop.title, 'QUOTATION');
+  const p = ok('sale.print', { id: b.id, printOpts: { purity: false, billNo: false }, notes: 'Thank you' }, T);
+  assert.strictEqual(p.printOpts.billNo, false);
+  assert.strictEqual(p.notes, 'Thank you');
+  const ex = ok('sale.export', { from: '2026-10-01', to: '2026-10-08', type: 'GST' }, T);
+  assert.ok(ex.bills.some((x) => x.billNo === 'IS/73'));
+  assert.ok(ex.bills.every((x) => x.type === 'GST'));
+  for (const m of ['bills', 'girvi', 'oldgold', 'orders', 'repairs', 'stock', 'dues', 'cash', 'customers']) {
+    const r = ok('export.list', { module: m, from: '2026-01-01', to: '2026-12-31' }, T);
+    assert.ok(r.columns.length && Array.isArray(r.rows), m);
+    r.rows.forEach((row) => assert.strictEqual(row.length, r.columns.length, m));
+  }
+  const E = ok('auth.login', { username: 'ravi', pin: '5678' }).token;
+  assert.ok(!ok('export.list', { module: 'stock', status: 'all' }, E).columns.includes('Our cost ₹'));
+});
+
 test('archive finished year keeps bills searchable', () => {
   const t2 = g.createContext ? null : null; // archive needs a finished year; fake one bill in FY 25-26
   g.insert_('Sales', { id: 'S_OLD', billNo: 'EST/25-26/0009', type: 'EST', fy: '25-26', date: '2026-03-10',

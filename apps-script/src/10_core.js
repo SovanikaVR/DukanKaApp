@@ -3,7 +3,8 @@
 function settingsSave_(user, d) {
   var allowed = Object.keys(DEFAULT_SETTINGS);
   var changed = {};
-  var NUM = { gst_default_pct: [0, 28], making_default_per_g: [0, 1e6], standard_cut_pct: [0, 100], standard_purity_pct: [0, 100],
+  var NUM = { making_default_silver: [0, 1e6], purity_silver: [1, 100],
+    gst_default_pct: [0, 28], making_default_per_g: [0, 1e6], standard_cut_pct: [0, 100], standard_purity_pct: [0, 100],
     interest_default_rate: [0, 100], interest_min_days: [0, 365], purity_24k: [1, 100], purity_22k: [1, 100], purity_18k: [1, 100] };
   // Check every value first, then save: a mistake in one box must not half-save the rest.
   Object.keys(d || {}).forEach(function (k) {
@@ -16,6 +17,11 @@ function settingsSave_(user, d) {
       v = v.trim().toUpperCase();
       req_(/^[0-3][0-9][A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(v), 'GSTIN is not valid (15 characters, like 27ABCDE1234F1Z5)');
     }
+    if ((k === 'shop_logo' || k === 'quote_logo') && v) {
+      req_(/^data:image\/(png|jpeg|webp);base64,/.test(v), 'Logo should be a picture');
+      req_(v.length < 45000, 'Logo picture is too big — use a smaller one');
+    }
+    if (k === 'making_default_pct' && v !== '') { var mp = parseFloat(v); req_(!isNaN(mp) && mp >= 0 && mp <= 100, 'Making % should be 0 to 100'); }
     if (NUM[k]) {
       var n = parseFloat(String(v).replace(/,/g, ''));
       req_(!isNaN(n) && n >= NUM[k][0] && n <= NUM[k][1], 'Check the value of ' + k.replace(/_/g, ' ') + ' (' + NUM[k][0] + ' to ' + NUM[k][1] + ')');

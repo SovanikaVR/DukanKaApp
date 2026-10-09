@@ -3,6 +3,7 @@ import { call } from '../api.js';
 import { S, isOwner, isViewer } from '../state.js';
 import { h, screen, field, busy, toast, inr, fdate, go, empty, ask, confirmBox } from '../ui.js';
 import { t } from '../i18n.js';
+import { exportCsvButton } from './exports.js';
 
 const CAT = {
   'sale': 'Sale', 'sale-cancel': 'Bill cancelled', 'old-gold': 'Old gold bought', 'girvi-given': 'Girvi given',
@@ -51,5 +52,5 @@ export async function render(params, query) {
       h('div', { class: 'kv muted' }, h('span', null, (e.notes || '') + ' · ' + e.mode), h('span', null, e.by + ' ' + String(e.at).slice(11, 16))),
       isOwner() && e.refType === 'manual' ? h('button', { class: 'link', onclick: () => removeEntry(e) }, t('Remove (wrong entry)')) : null)) : empty('No entries this day'),
     h('div', { class: 'hint' }, t('Bills, girvi, orders and repairs are corrected from their own screens. Only expenses / other income are removed here.'))
-  ]);
+  ], null, { right: exportCsvButton('cash', () => ({ from: date.slice(0, 8) + '01', to: date })) });
 }

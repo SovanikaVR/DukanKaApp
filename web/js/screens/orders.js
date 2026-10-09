@@ -5,6 +5,7 @@ import { h, screen, field, card, grid, seg, busy, toast, num, inr, fdate, g3, se
 import { customerPicker } from '../picker.js';
 import { receiptHtml, docActions } from '../bill.js';
 import { t } from '../i18n.js';
+import { exportCsvButton } from './exports.js';
 
 const STATUS = { booked: 'Booked', making: 'With karigar', ready: 'Ready', delivered: 'Delivered', cancelled: 'Cancelled' };
 
@@ -22,7 +23,7 @@ export async function list(params, query) {
       h('div', { class: 'kv' }, h('b', null, o.customerName), h('span', { class: 'tag' + (o.rateFixed ? '' : ' gold') }, o.rateFixed ? 'Rate fixed' : 'Rate not fixed')),
       h('div', { class: 'kv muted' }, h('span', null, o.item + ' · ~' + g3(o.estWt) + ' g · paid ' + inr(o.paid)),
         h('span', null, (o.deliveryDate ? fdate(o.deliveryDate) : 'no date') + ' · ' + STATUS[o.status])))) : empty('No orders')
-  ], isViewer() ? null : h('a', { class: 'btn', href: '#/order-new' }, '+ Book order'));
+  ], isViewer() ? null : h('a', { class: 'btn', href: '#/order-new' }, '+ Book order'), { right: exportCsvButton('orders', () => ({})) });
 }
 
 export async function create(params, query) {

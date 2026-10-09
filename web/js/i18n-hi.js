@@ -254,13 +254,44 @@ Object.assign(HI, {
   'Internet is slow… still saving, please wait': 'इंटरनेट धीमा है… अभी सेव हो रहा है, रुकिए',
   'This part of the app is switched off in Settings.': 'ऐप का यह हिस्सा सेटिंग में बंद है।', 'View-only login: you can see records but not add new ones.': 'सिर्फ देखने वाला लॉगिन: आप देख सकते हैं, नया नहीं जोड़ सकते।',
   'Page not found': 'पेज नहीं मिला', 'Profit is shown only to the owner.': 'प्रॉफिट सिर्फ मालिक को दिखता है।', 'Profit': 'प्रॉफिट', 'silver': 'चाँदी',
-  'Left as baki': 'बाकी में गया', 'Bill cancelled': 'बिल रद्द हो गया',
+  'Left as baki': 'बाकी में गया', 'Rate ₹/10 g': 'भाव ₹/10 ग्राम', 'Rate ₹/kg': 'भाव ₹/किलो', 'Export': 'एक्सपोर्ट', 'Export this list': 'यह लिस्ट एक्सपोर्ट करें', 'rows': 'लाइन',
+  'Excel opens in Excel / Google Sheets. PDF is for printing or sending.': 'Excel फ़ाइल Excel / Google Sheets में खुलती है। PDF प्रिंट या भेजने के लिए है।', 'Bill cancelled': 'बिल रद्द हो गया',
   'The customer had already paid baki on this bill. Give back': 'ग्राहक इस बिल की बाकी दे चुका था। वापस दें',
   'to the customer (written in the cash book).': 'ग्राहक को (कैश बुक में लिखा गया)।', 'Only the owner can cancel an order': 'सिर्फ मालिक ऑर्डर रद्द कर सकता है', 'Returned to customer': 'ग्राहक को लौटाया', 'returned': 'लौटाया', 'Cancelled': 'रद्द', 'owed': 'देना', 'Cash to pay': 'देना कैश', 'OK?': 'ठीक है?',
   'blank = final weight ×': 'खाली = आखिरी वजन ×', 'Loan is': 'लोन', 'of value': 'कीमत का', 'high': 'ज़्यादा', 'Enter the weight to see value': 'कीमत देखने के लिए वजन डालें',
   'per 100 / month': 'प्रति 100 / माह', 'days': 'दिन', 'per month': 'प्रति माह', 'per day': 'प्रति दिन', 'Pending': 'बाकी', 'Resize': 'साइज़ बदलना', 'Not yet': 'अभी नहीं',
   'Rate not fixed': 'भाव फिक्स नहीं', 'Paid cash': 'कैश दिया', 'Paid cash (rate cut)': 'कैश दिया (भाव कट)', 'Gave fine gold': 'फाइन सोना दिया', 'Gave gold': 'सोना दिया',
   'Paid labour': 'मज़दूरी दी', 'owner': 'मालिक', 'employee': 'कर्मचारी', 'viewer': 'सिर्फ देखना', 'Polish': 'पॉलिश', 'Repair ': 'रिपेयर '
+});
+
+Object.assign(HI, {
+  'Non-GST (quotation)': 'बिना GST (कोटेशन)', 'Quotation': 'कोटेशन', 'Tax invoice': 'टैक्स इनवॉइस', 'Note on the bill (optional)': 'बिल पर नोट (ज़रूरी नहीं)',
+  'Bill number (blank = next number)': 'बिल नंबर (खाली = अगला नंबर)', 'Bill date': 'बिल की तारीख',
+  'Bill details: note, bill number, date, what to print': 'बिल की जानकारी: नोट, बिल नंबर, तारीख, क्या छापना है',
+  'Type a bill number only for a missed or back-dated bill. It must not be used before.': 'बिल नंबर सिर्फ छूटे या पुरानी तारीख के बिल के लिए लिखें। यह पहले इस्तेमाल न हुआ हो।',
+  'Show on this bill': 'इस बिल पर दिखाएँ', 'Net weight (g)': 'नेट वजन (g)', 'Making': 'मजदूरी', 'Making as': 'मजदूरी कैसे', 'Making %': 'मजदूरी %',
+  'Making ₹ (whole piece)': 'मजदूरी ₹ (पूरा नग)', 'Making ₹/g': 'मजदूरी ₹/g',
+  'Bill number': 'बिल नंबर', 'Gross weight': 'कुल वजन', 'Net weight': 'नेट वजन', 'Purity column': 'शुद्धता कॉलम', 'Purity after item name': 'नाम के साथ शुद्धता',
+  'HSN': 'HSN', 'HUID': 'HUID', 'Making (₹/g or %)': 'मजदूरी (₹/g या %)', 'Making amount': 'मजदूरी रकम', 'Metal value': 'धातु कीमत',
+  'Amount in words': 'शब्दों में रकम', 'Cash / UPI / baki': 'कैश / UPI / बाकी', 'Old gold details': 'पुराने सोने की जानकारी', 'Signature': 'हस्ताक्षर',
+  'What to print on this bill': 'इस बिल पर क्या छापना है', 'Note on the bill': 'बिल पर नोट', 'Save print choices': 'छपाई की पसंद सेव करें',
+  'Default choices for every bill are in Settings → Bill design.': 'सभी बिलों की सामान्य पसंद सेटिंग → बिल डिज़ाइन में है।',
+  'PDF of all bills': 'सभी बिलों की PDF', 'Excel': 'Excel', 'Export bills': 'बिल एक्सपोर्ट', 'All bills of a period in one tap': 'एक टैप में किसी समय के सभी बिल',
+  'This month': 'इस महीने', 'Last month': 'पिछले महीने', 'This year': 'इस साल', 'All bills': 'सभी बिल', 'GST bills': 'GST बिल', 'Quotations': 'कोटेशन',
+  'Leave out cancelled': 'रद्द बिल छोड़ें', 'Include cancelled': 'रद्द बिल भी', 'Make PDF & share': 'PDF बनाएँ और भेजें', 'Excel list of these bills': 'इन बिलों की Excel लिस्ट',
+  'One PDF with every bill (one bill per page). Share it on WhatsApp or e-mail to your accountant, or save it.': 'हर बिल एक पेज पर, एक ही PDF में। WhatsApp या ईमेल से अकाउंटेंट को भेजें या सेव करें।',
+  'Getting the bills…': 'बिल ला रहे हैं…', 'No bills in this period': 'इस समय में कोई बिल नहीं', 'bills': 'बिल', 'making PDF…': 'PDF बन रहा है…',
+  'Saved to Downloads': 'Downloads में सेव हुआ', 'Nothing to export in this period': 'इस समय में कुछ नहीं', 'Making the file…': 'फ़ाइल बन रही है…',
+  'BILL DESIGN': 'बिल डिज़ाइन', 'Bill language': 'बिल की भाषा', 'Rate per 10 g': 'भाव प्रति 10 g', 'Rate per gram': 'भाव प्रति ग्राम',
+  'GST BILL · top of the bill': 'GST बिल · बिल का ऊपरी हिस्सा', 'QUOTATION (non-GST) · top of the bill': 'कोटेशन (बिना GST) · बिल का ऊपरी हिस्सा',
+  'Show on GST bills': 'GST बिल पर दिखाएँ', 'Show on quotations': 'कोटेशन पर दिखाएँ', 'Shop logo (picture)': 'दुकान का लोगो (फोटो)',
+  'Quotation logo (blank = shop logo)': 'कोटेशन लोगो (खाली = दुकान का लोगो)', 'Choose picture': 'फोटो चुनें',
+  'Each bill can still hide or show fields from its own screen.': 'हर बिल की अपनी स्क्रीन से भी चीज़ें दिखा / छिपा सकते हैं।',
+  'Making on new bills': 'नए बिल में मजदूरी', 'Making ₹ per gram': 'मजदूरी ₹ प्रति ग्राम', 'Old gold bought from customers': 'ग्राहकों से खरीदा पुराना सोना',
+  'No GST on old gold bought': 'खरीदे पुराने सोने पर GST नहीं', 'Show GST (reverse charge) in reports': 'रिपोर्ट में GST (रिवर्स चार्ज) दिखाएँ',
+  'In an exchange, GST is charged on the full price of the new jewellery (old gold is not deducted before GST). Gold bought from a private person is normally not taxed; confirm with your CA.':
+    'बदली में GST नए गहने की पूरी कीमत पर लगता है (GST से पहले पुराना सोना नहीं घटता)। आम आदमी से खरीदे सोने पर आमतौर पर GST नहीं लगता; अपने CA से पक्का कर लें।',
+  'GST on old gold bought (reverse charge 3%)': 'खरीदे पुराने सोने पर GST (रिवर्स चार्ज 3%)', 'Silver': 'चाँदी'
 });
 
 /* Messages that carry a number or name: [pattern, Hindi with $1]. */

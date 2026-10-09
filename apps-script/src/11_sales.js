@@ -60,8 +60,24 @@ function saleCreate_(user, d) {
     }
     var w = pos_(l.weight, 'Weight'), rate = pos_(l.rate, 'Rate'), mk = pos_(l.makingPerG, 'Making');
     pos_(l.amount, 'Amount');
-    var amount = l.amount !== undefined && l.amount !== '' && !w ? num_(l.amount)
-      : round2_(Calc.evalFormula(saleFormula, { Weight: w, Rate: rate, Making: mk }));
+    var gross = l.grossWt !== undefined && l.grossWt !== '' ? round3_(pos_(l.grossWt, 'Gross weight')) : round3_(w);
+    req_(gross + 0.0005 >= w, 'Gross weight cannot be less than net weight');
+    // Making can be ₹ per gram, a % of the metal value, or one fixed ₹ amount for the piece.
+    var mType = l.makingType === 'pct' ? 'pct' : l.makingType === 'fixed' ? 'fixed' : 'perg';
+    var mPct = mType === 'pct' ? pos_(l.makingPct, 'Making %') : 0;
+    var mFixed = mType === 'fixed' ? pos_(l.makingFixed, 'Making') : 0;
+    req_(mPct <= 100, 'Making % should be 0 to 100');
+    var metalValue = round2_(w * rate);
+    var makingAmt, amount;
+    if (l.amount !== undefined && l.amount !== '' && !w) { amount = num_(l.amount); makingAmt = 0; metalValue = 0; }
+    else if (mType === 'perg') {
+      amount = round2_(Calc.evalFormula(saleFormula, { Weight: w, Rate: rate, Making: mk }));
+      makingAmt = round2_(amount - metalValue);
+    } else {
+      makingAmt = round2_(mType === 'pct' ? metalValue * mPct / 100 : mFixed);
+      amount = round2_(metalValue + makingAmt);
+      mk = 0;
+    }
     subtotal += amount;
     // A lot (many pieces, or loose weight) is sold from: only the weight / pieces sold leave stock,
     // and that part is remembered on the bill so cancelling puts back exactly that.
@@ -90,8 +106,8 @@ function saleCreate_(user, d) {
     return {
       itemId: l.itemId || '', tag: item ? item.tag : '', name: String(l.name || (item && item.name) || 'Item'),
       metal: l.metal || (item && item.metal) || 'gold', purityPct: num_(l.purityPct || (item && item.purityPct)),
-      huid: String(l.huid || ''), weight: round3_(w), rate: rate, makingPerG: mk,
-      metalValue: round2_(w * rate), making: round2_(w * mk), amount: amount, cost: cost, part: part
+      huid: String(l.huid || ''), weight: round3_(w), grossWt: gross, rate: rate, makingPerG: mk,
+      makingType: mType, makingPct: mPct, metalValue: metalValue, making: makingAmt, amount: amount, cost: cost, part: part
     };
   });
   subtotal = round2_(subtotal);
@@ -113,15 +129,24 @@ function saleCreate_(user, d) {
   }
 
   var fy = fyOf_(date);
-  var no = nextCounter_(type + '_' + fy);
-  var billNo = type + '/' + fy + '/' + String(no).padStart(4, '0');
+  // Bill number: next in the series, or typed by hand (for a missed / back-dated bill). Never used twice.
+  var billNo = String(d.billNo || '').trim();
+  if (billNo) {
+    req_(billNo.length <= 30, 'Bill number is too long');
+    var taken = rows_('Sales').some(function (x) { return x.billNo.toLowerCase() === billNo.toLowerCase(); });
+    req_(!taken, 'Bill number ' + billNo + ' is already used');
+  } else {
+    billNo = type + '/' + fy + '/' + String(nextCounter_(type + '_' + fy)).padStart(4, '0');
+  }
+  var printOpts = d.printOpts && typeof d.printOpts === 'object' ? d.printOpts : {};
+  var notes = String(d.notes || '').trim().slice(0, 500);
   var id = uid_('S');
   var bill = {
     id: id, billNo: billNo, type: type, fy: fy, date: date, customerId: c.id,
     customerName: customerName_(c), mobile: c.mobile, village: c.village,
     lines: cleanLines, oldGold: old, gstPct: gstPct, subtotal: subtotal, tax: tax, roundOff: roundOff,
     invoiceTotal: invoiceTotal, oldValue: oldValue, net: net, cash: cash, upi: upi, udhaar: udhaar,
-    costTotal: round2_(costTotal), status: 'ok', by: user.username, at: nowIso_()
+    costTotal: round2_(costTotal), status: 'ok', by: user.username, at: nowIso_(), notes: notes, printOpts: printOpts
   };
   insert_('Sales', bill);
   cleanLines.forEach(function (l) {
@@ -177,14 +202,12 @@ function saleGet_(id, fy) {
   var out = {};
   SCHEMA.Sales.forEach(function (k) { out[k] = b[k]; });
   out.lines = json_(b.lines, []);
+  out.printOpts = json_(b.printOpts, {});
   out.oldGold = json_(b.oldGold, []);
   ['gstPct', 'subtotal', 'tax', 'roundOff', 'invoiceTotal', 'oldValue', 'net', 'cash', 'upi', 'udhaar', 'costTotal']
     .forEach(function (k) { out[k] = num_(b[k]); });
   delete out.costTotal;
-  out.shop = {
-    name: s.shop_name, address: s.shop_address, mobile: s.shop_mobile, gstin: s.shop_gstin,
-    state: s.shop_state, hsn: s.hsn_code, terms: s.bill_terms
-  };
+  out.shop = billShop_(s, b.type);
   var c = find_('Customers', b.customerId);
   out.customer = c ? { name: customerName_(c), mobile: c.mobile, village: c.village, address: c.address } : null;
   out.rate = rateOn_(b.date);
@@ -296,4 +319,72 @@ function oldGoldList_(d) {
         ourPurityPct: num_(g.ourPurityPct), ourFine: num_(g.ourFine), status: g.status, source: g.source
       };
     });
+}
+
+/** Header and footer printed on a bill. A quotation can carry a different shop name (e.g. a sister shop). */
+function billShop_(s, type) {
+  var gst = type === 'GST';
+  var q = function (k) { return s[k === 'name' ? 'quote_shop_name' : 'quote_' + k] || s['shop_' + k] || ''; };
+  return {
+    name: gst ? s.shop_name : q('name'), tagline: gst ? s.shop_tagline : q('tagline'),
+    address: gst ? s.shop_address : q('address'), mobile: s.shop_mobile, phones: gst ? s.shop_phones : q('phones'),
+    logo: gst ? s.shop_logo : (s.quote_logo || (s.quote_shop_name ? '' : s.shop_logo)),
+    gstin: s.shop_gstin, state: s.shop_state, hsn: s.hsn_code, bis: s.bis_licence,
+    terms: gst ? s.bill_terms : (s.quote_footer || s.bill_terms), title: gst ? 'TAX INVOICE' : (s.quote_title || 'QUOTATION'),
+    lang: s.bill_lang || 'en', rateUnit: s.bill_rate_unit || '10g',
+    fields: json_(gst ? s.bill_fields_gst : s.bill_fields_quote, {})
+  };
+}
+
+/** Change what is printed on one bill (show / hide fields, note). Money is never changed here. */
+function salePrint_(user, d) {
+  var b = find_('Sales', d.id);
+  req_(b, 'Bill not found');
+  var patch = {};
+  if (d.printOpts && typeof d.printOpts === 'object') patch.printOpts = d.printOpts;
+  if (d.notes !== undefined) patch.notes = String(d.notes || '').trim().slice(0, 500);
+  update_('Sales', b.id, patch);
+  audit_(user, 'sale.print', b.id, patch);
+  return saleGet_(b.id);
+}
+
+/** All bills of a period with everything needed to print them (for one-click PDFs). */
+function saleExport_(d) {
+  var from = readDate_(d.from), to = d.to ? readDate_(d.to) : from;
+  var s = settings_();
+  var list = rows_('Sales').filter(function (b) {
+    if (b.date < from || b.date > to) return false;
+    if (d.type && d.type !== 'all' && b.type !== d.type) return false;
+    if (!d.withCancelled && b.status === 'void') return false;
+    return true;
+  });
+  list.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : (a.billNo < b.billNo ? -1 : 1); });
+  req_(list.length <= 400, list.length + ' bills in this period. Please pick a shorter period (up to 400 bills at a time).');
+  var custs = {};
+  rows_('Customers').forEach(function (c) { custs[c.id] = c; });
+  var shops = { GST: billShop_(s, 'GST'), EST: billShop_(s, 'EST') };
+  var rates = rows_('Rates').slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+  var rateFor = function (date) {
+    var r = null;
+    rates.forEach(function (x) { if (x.date <= date) r = x; });
+    return r ? { g24: num_(r.g24), g22: num_(r.g22), g18: num_(r.g18), silver: num_(r.silver) } : null;
+  };
+  var bills = list.map(function (b) {
+    var out = {};
+    SCHEMA.Sales.forEach(function (k) { out[k] = b[k]; });
+    out.lines = json_(b.lines, []).map(function (l) { delete l.cost; if (l.part) delete l.part.cost; return l; });
+    out.oldGold = json_(b.oldGold, []);
+    out.printOpts = json_(b.printOpts, {});
+    ['gstPct', 'subtotal', 'tax', 'roundOff', 'invoiceTotal', 'oldValue', 'net', 'cash', 'upi', 'udhaar'].forEach(function (k) { out[k] = num_(b[k]); });
+    delete out.costTotal;
+    out.shop = shops[b.type] || shops.EST;
+    var c = custs[b.customerId];
+    out.customer = c ? { name: customerName_(c), mobile: c.mobile, village: c.village, address: c.address } : null;
+    out.rate = rateFor(b.date);
+    return out;
+  });
+  var totals = { count: bills.length, taxable: 0, tax: 0, total: 0 };
+  bills.forEach(function (b) { totals.taxable += b.subtotal; totals.tax += b.tax; totals.total += b.invoiceTotal; });
+  totals.taxable = round2_(totals.taxable); totals.tax = round2_(totals.tax); totals.total = round2_(totals.total);
+  return { from: from, to: to, bills: bills, totals: totals };
 }

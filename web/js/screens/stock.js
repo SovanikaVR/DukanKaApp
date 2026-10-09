@@ -3,6 +3,7 @@ import { call } from '../api.js';
 import { list as settingList, purityFor, isViewer, isOwner } from '../state.js';
 import { h, screen, field, card, grid, seg, busy, toast, inr, g3, go, empty, chips, num, ask } from '../ui.js';
 import { t } from '../i18n.js';
+import { exportCsvButton } from './exports.js';
 
 export async function render(params, query) {
   const metal = query.m || 'gold';
@@ -46,7 +47,7 @@ export async function render(params, query) {
           isOwner() ? h('button', { class: 'link', onclick: () => edit(i) }, t('Edit')) : null,
           isOwner() ? h('button', { class: 'link', onclick: () => remove(i) }, 'Remove') : null)))) : empty('Nothing here'),
     h('div', { class: 'hint' }, t('Selling from stock: in New Sale tap "From stock". Then the item leaves stock by itself (for a lot, only the weight / pieces sold). Items typed by hand in a bill do not change stock.'))
-  ], isViewer() ? null : h('a', { class: 'btn', href: '#/stock-add?m=' + metal }, '+ Add stock'));
+  ], isViewer() ? null : h('a', { class: 'btn', href: '#/stock-add?m=' + metal }, '+ Add stock'), { right: exportCsvButton('stock', () => ({ status: 'in' })) });
 }
 
 export async function add(params, query) {

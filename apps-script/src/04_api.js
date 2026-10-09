@@ -84,6 +84,9 @@ var ROUTES = {
   'repairs.edit': function (u, d) { return repairEdit_(u, d); },
   'cash.void': function (u, d) { return cashVoid_(u, d); },
   'home.summary': function () { return homeSummary_(); },
+  'sale.print': function (u, d) { return salePrint_(u, d); },
+  'sale.export': function (u, d) { return saleExport_(d); },
+  'export.list': function (u, d) { return exportList_(u, d); },
   'admin.archive': function (u, d) { return archiveFy_(u, d.fy); },
   'admin.backupNow': function () { return backupNow_(); }
 };
@@ -93,7 +96,7 @@ var READ_ONLY = {
   'sale.get': 1, 'oldgold.list': 1, 'loans.list': 1, 'loans.get': 1, 'orders.list': 1, 'orders.get': 1,
   'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'melt.list': 1, 'fine.summary': 1,
   'parties.list': 1, 'parties.ledger': 1, 'cash.list': 1, 'reports.daily': 1, 'reports.month': 1,
-  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1
+  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1, 'sale.export': 1, 'export.list': 1
 };
 
 function handle_(action, token, data) {

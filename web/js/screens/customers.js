@@ -3,6 +3,7 @@ import { call } from '../api.js';
 import { modOn, isViewer } from '../state.js';
 import { h, screen, field, card, grid, busy, toast, inr, fdate, g3, icon, empty, go, sec, ask } from '../ui.js';
 import { t } from '../i18n.js';
+import { exportCsvButton } from './exports.js';
 
 export async function search(params, query) {
   let village = query.v || '';
@@ -33,7 +34,7 @@ export async function search(params, query) {
   }
   run();
   return screen('Find customer', null, [q, sec(t('Village')), villages, count, list],
-    isViewer() ? null : h('a', { class: 'btn2', href: '#/customer-edit/new' }, '+ ' + t('New customer')));
+    isViewer() ? null : h('a', { class: 'btn2', href: '#/customer-edit/new' }, '+ ' + t('New customer')), { right: exportCsvButton('customers', () => ({})) });
 }
 
 export async function profile({ id }) {

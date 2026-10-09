@@ -10,7 +10,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.2.0';
+var APP_VERSION = '1.3.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -22,7 +22,7 @@ var SCHEMA = {
     'makingPerG', 'costTotal', 'status', 'source', 'sourceId', 'soldBillId', 'addedAt', 'by'],
   Sales: ['id', 'billNo', 'type', 'fy', 'date', 'customerId', 'customerName', 'mobile', 'village',
     'lines', 'oldGold', 'gstPct', 'subtotal', 'tax', 'roundOff', 'invoiceTotal', 'oldValue', 'net',
-    'cash', 'upi', 'udhaar', 'costTotal', 'status', 'by', 'at'],
+    'cash', 'upi', 'udhaar', 'costTotal', 'status', 'by', 'at', 'notes', 'printOpts'],
   OldGold: ['id', 'date', 'customerId', 'customerName', 'source', 'billId', 'item', 'metal', 'weight',
     'cutPct', 'customerFine', 'rate', 'amount', 'ourPurityPct', 'ourFine', 'status', 'meltId', 'by', 'at'],
   Loans: ['id', 'date', 'customerId', 'customerName', 'mobile', 'item', 'metal', 'purityPct',
@@ -57,6 +57,28 @@ var DEFAULT_SETTINGS = {
   gst_default_pct: '3',
   hsn_code: '7113',
   bill_terms: '',
+  shop_tagline: '',
+  shop_phones: '',
+  bis_licence: '',
+  shop_logo: '',
+  quote_title: 'QUOTATION',
+  quote_shop_name: '',
+  quote_tagline: '',
+  quote_address: '',
+  quote_phones: '',
+  quote_logo: '',
+  quote_footer: '',
+  bill_lang: 'en',
+  bill_rate_unit: '10g',
+  bill_fields_gst: JSON.stringify({ billNo: true, gross: true, net: true, purity: true, purityInName: false, hsn: true, huid: false,
+    rate: true, making: true, makingAmt: false, metalValue: false, words: true, payment: true, oldGold: true, sign: true }),
+  bill_fields_quote: JSON.stringify({ billNo: true, gross: true, net: true, purity: false, purityInName: false, hsn: false, huid: false,
+    rate: true, making: true, makingAmt: false, metalValue: false, words: false, payment: true, oldGold: true, sign: true }),
+  making_default_type: 'perg',
+  making_default_pct: '',
+  making_default_silver: '0',
+  purity_silver: '100',
+  oldgold_rcm: 'false',
   making_default_per_g: '150',
   standard_cut_pct: '20',
   standard_purity_pct: '80',
@@ -536,6 +558,9 @@ var ROUTES = {
   'repairs.edit': function (u, d) { return repairEdit_(u, d); },
   'cash.void': function (u, d) { return cashVoid_(u, d); },
   'home.summary': function () { return homeSummary_(); },
+  'sale.print': function (u, d) { return salePrint_(u, d); },
+  'sale.export': function (u, d) { return saleExport_(d); },
+  'export.list': function (u, d) { return exportList_(u, d); },
   'admin.archive': function (u, d) { return archiveFy_(u, d.fy); },
   'admin.backupNow': function () { return backupNow_(); }
 };
@@ -545,7 +570,7 @@ var READ_ONLY = {
   'sale.get': 1, 'oldgold.list': 1, 'loans.list': 1, 'loans.get': 1, 'orders.list': 1, 'orders.get': 1,
   'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'melt.list': 1, 'fine.summary': 1,
   'parties.list': 1, 'parties.ledger': 1, 'cash.list': 1, 'reports.daily': 1, 'reports.month': 1,
-  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1
+  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1, 'sale.export': 1, 'export.list': 1
 };
 
 function handle_(action, token, data) {
@@ -609,7 +634,8 @@ function hideCost_(user, bill) {
 function settingsSave_(user, d) {
   var allowed = Object.keys(DEFAULT_SETTINGS);
   var changed = {};
-  var NUM = { gst_default_pct: [0, 28], making_default_per_g: [0, 1e6], standard_cut_pct: [0, 100], standard_purity_pct: [0, 100],
+  var NUM = { making_default_silver: [0, 1e6], purity_silver: [1, 100],
+    gst_default_pct: [0, 28], making_default_per_g: [0, 1e6], standard_cut_pct: [0, 100], standard_purity_pct: [0, 100],
     interest_default_rate: [0, 100], interest_min_days: [0, 365], purity_24k: [1, 100], purity_22k: [1, 100], purity_18k: [1, 100] };
   // Check every value first, then save: a mistake in one box must not half-save the rest.
   Object.keys(d || {}).forEach(function (k) {
@@ -622,6 +648,11 @@ function settingsSave_(user, d) {
       v = v.trim().toUpperCase();
       req_(/^[0-3][0-9][A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(v), 'GSTIN is not valid (15 characters, like 27ABCDE1234F1Z5)');
     }
+    if ((k === 'shop_logo' || k === 'quote_logo') && v) {
+      req_(/^data:image\/(png|jpeg|webp);base64,/.test(v), 'Logo should be a picture');
+      req_(v.length < 45000, 'Logo picture is too big — use a smaller one');
+    }
+    if (k === 'making_default_pct' && v !== '') { var mp = parseFloat(v); req_(!isNaN(mp) && mp >= 0 && mp <= 100, 'Making % should be 0 to 100'); }
     if (NUM[k]) {
       var n = parseFloat(String(v).replace(/,/g, ''));
       req_(!isNaN(n) && n >= NUM[k][0] && n <= NUM[k][1], 'Check the value of ' + k.replace(/_/g, ' ') + ' (' + NUM[k][0] + ' to ' + NUM[k][1] + ')');
@@ -891,8 +922,24 @@ function saleCreate_(user, d) {
     }
     var w = pos_(l.weight, 'Weight'), rate = pos_(l.rate, 'Rate'), mk = pos_(l.makingPerG, 'Making');
     pos_(l.amount, 'Amount');
-    var amount = l.amount !== undefined && l.amount !== '' && !w ? num_(l.amount)
-      : round2_(Calc.evalFormula(saleFormula, { Weight: w, Rate: rate, Making: mk }));
+    var gross = l.grossWt !== undefined && l.grossWt !== '' ? round3_(pos_(l.grossWt, 'Gross weight')) : round3_(w);
+    req_(gross + 0.0005 >= w, 'Gross weight cannot be less than net weight');
+    // Making can be ₹ per gram, a % of the metal value, or one fixed ₹ amount for the piece.
+    var mType = l.makingType === 'pct' ? 'pct' : l.makingType === 'fixed' ? 'fixed' : 'perg';
+    var mPct = mType === 'pct' ? pos_(l.makingPct, 'Making %') : 0;
+    var mFixed = mType === 'fixed' ? pos_(l.makingFixed, 'Making') : 0;
+    req_(mPct <= 100, 'Making % should be 0 to 100');
+    var metalValue = round2_(w * rate);
+    var makingAmt, amount;
+    if (l.amount !== undefined && l.amount !== '' && !w) { amount = num_(l.amount); makingAmt = 0; metalValue = 0; }
+    else if (mType === 'perg') {
+      amount = round2_(Calc.evalFormula(saleFormula, { Weight: w, Rate: rate, Making: mk }));
+      makingAmt = round2_(amount - metalValue);
+    } else {
+      makingAmt = round2_(mType === 'pct' ? metalValue * mPct / 100 : mFixed);
+      amount = round2_(metalValue + makingAmt);
+      mk = 0;
+    }
     subtotal += amount;
     // A lot (many pieces, or loose weight) is sold from: only the weight / pieces sold leave stock,
     // and that part is remembered on the bill so cancelling puts back exactly that.
@@ -921,8 +968,8 @@ function saleCreate_(user, d) {
     return {
       itemId: l.itemId || '', tag: item ? item.tag : '', name: String(l.name || (item && item.name) || 'Item'),
       metal: l.metal || (item && item.metal) || 'gold', purityPct: num_(l.purityPct || (item && item.purityPct)),
-      huid: String(l.huid || ''), weight: round3_(w), rate: rate, makingPerG: mk,
-      metalValue: round2_(w * rate), making: round2_(w * mk), amount: amount, cost: cost, part: part
+      huid: String(l.huid || ''), weight: round3_(w), grossWt: gross, rate: rate, makingPerG: mk,
+      makingType: mType, makingPct: mPct, metalValue: metalValue, making: makingAmt, amount: amount, cost: cost, part: part
     };
   });
   subtotal = round2_(subtotal);
@@ -944,15 +991,24 @@ function saleCreate_(user, d) {
   }
 
   var fy = fyOf_(date);
-  var no = nextCounter_(type + '_' + fy);
-  var billNo = type + '/' + fy + '/' + String(no).padStart(4, '0');
+  // Bill number: next in the series, or typed by hand (for a missed / back-dated bill). Never used twice.
+  var billNo = String(d.billNo || '').trim();
+  if (billNo) {
+    req_(billNo.length <= 30, 'Bill number is too long');
+    var taken = rows_('Sales').some(function (x) { return x.billNo.toLowerCase() === billNo.toLowerCase(); });
+    req_(!taken, 'Bill number ' + billNo + ' is already used');
+  } else {
+    billNo = type + '/' + fy + '/' + String(nextCounter_(type + '_' + fy)).padStart(4, '0');
+  }
+  var printOpts = d.printOpts && typeof d.printOpts === 'object' ? d.printOpts : {};
+  var notes = String(d.notes || '').trim().slice(0, 500);
   var id = uid_('S');
   var bill = {
     id: id, billNo: billNo, type: type, fy: fy, date: date, customerId: c.id,
     customerName: customerName_(c), mobile: c.mobile, village: c.village,
     lines: cleanLines, oldGold: old, gstPct: gstPct, subtotal: subtotal, tax: tax, roundOff: roundOff,
     invoiceTotal: invoiceTotal, oldValue: oldValue, net: net, cash: cash, upi: upi, udhaar: udhaar,
-    costTotal: round2_(costTotal), status: 'ok', by: user.username, at: nowIso_()
+    costTotal: round2_(costTotal), status: 'ok', by: user.username, at: nowIso_(), notes: notes, printOpts: printOpts
   };
   insert_('Sales', bill);
   cleanLines.forEach(function (l) {
@@ -1008,14 +1064,12 @@ function saleGet_(id, fy) {
   var out = {};
   SCHEMA.Sales.forEach(function (k) { out[k] = b[k]; });
   out.lines = json_(b.lines, []);
+  out.printOpts = json_(b.printOpts, {});
   out.oldGold = json_(b.oldGold, []);
   ['gstPct', 'subtotal', 'tax', 'roundOff', 'invoiceTotal', 'oldValue', 'net', 'cash', 'upi', 'udhaar', 'costTotal']
     .forEach(function (k) { out[k] = num_(b[k]); });
   delete out.costTotal;
-  out.shop = {
-    name: s.shop_name, address: s.shop_address, mobile: s.shop_mobile, gstin: s.shop_gstin,
-    state: s.shop_state, hsn: s.hsn_code, terms: s.bill_terms
-  };
+  out.shop = billShop_(s, b.type);
   var c = find_('Customers', b.customerId);
   out.customer = c ? { name: customerName_(c), mobile: c.mobile, village: c.village, address: c.address } : null;
   out.rate = rateOn_(b.date);
@@ -1127,6 +1181,74 @@ function oldGoldList_(d) {
         ourPurityPct: num_(g.ourPurityPct), ourFine: num_(g.ourFine), status: g.status, source: g.source
       };
     });
+}
+
+/** Header and footer printed on a bill. A quotation can carry a different shop name (e.g. a sister shop). */
+function billShop_(s, type) {
+  var gst = type === 'GST';
+  var q = function (k) { return s[k === 'name' ? 'quote_shop_name' : 'quote_' + k] || s['shop_' + k] || ''; };
+  return {
+    name: gst ? s.shop_name : q('name'), tagline: gst ? s.shop_tagline : q('tagline'),
+    address: gst ? s.shop_address : q('address'), mobile: s.shop_mobile, phones: gst ? s.shop_phones : q('phones'),
+    logo: gst ? s.shop_logo : (s.quote_logo || (s.quote_shop_name ? '' : s.shop_logo)),
+    gstin: s.shop_gstin, state: s.shop_state, hsn: s.hsn_code, bis: s.bis_licence,
+    terms: gst ? s.bill_terms : (s.quote_footer || s.bill_terms), title: gst ? 'TAX INVOICE' : (s.quote_title || 'QUOTATION'),
+    lang: s.bill_lang || 'en', rateUnit: s.bill_rate_unit || '10g',
+    fields: json_(gst ? s.bill_fields_gst : s.bill_fields_quote, {})
+  };
+}
+
+/** Change what is printed on one bill (show / hide fields, note). Money is never changed here. */
+function salePrint_(user, d) {
+  var b = find_('Sales', d.id);
+  req_(b, 'Bill not found');
+  var patch = {};
+  if (d.printOpts && typeof d.printOpts === 'object') patch.printOpts = d.printOpts;
+  if (d.notes !== undefined) patch.notes = String(d.notes || '').trim().slice(0, 500);
+  update_('Sales', b.id, patch);
+  audit_(user, 'sale.print', b.id, patch);
+  return saleGet_(b.id);
+}
+
+/** All bills of a period with everything needed to print them (for one-click PDFs). */
+function saleExport_(d) {
+  var from = readDate_(d.from), to = d.to ? readDate_(d.to) : from;
+  var s = settings_();
+  var list = rows_('Sales').filter(function (b) {
+    if (b.date < from || b.date > to) return false;
+    if (d.type && d.type !== 'all' && b.type !== d.type) return false;
+    if (!d.withCancelled && b.status === 'void') return false;
+    return true;
+  });
+  list.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : (a.billNo < b.billNo ? -1 : 1); });
+  req_(list.length <= 400, list.length + ' bills in this period. Please pick a shorter period (up to 400 bills at a time).');
+  var custs = {};
+  rows_('Customers').forEach(function (c) { custs[c.id] = c; });
+  var shops = { GST: billShop_(s, 'GST'), EST: billShop_(s, 'EST') };
+  var rates = rows_('Rates').slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+  var rateFor = function (date) {
+    var r = null;
+    rates.forEach(function (x) { if (x.date <= date) r = x; });
+    return r ? { g24: num_(r.g24), g22: num_(r.g22), g18: num_(r.g18), silver: num_(r.silver) } : null;
+  };
+  var bills = list.map(function (b) {
+    var out = {};
+    SCHEMA.Sales.forEach(function (k) { out[k] = b[k]; });
+    out.lines = json_(b.lines, []).map(function (l) { delete l.cost; if (l.part) delete l.part.cost; return l; });
+    out.oldGold = json_(b.oldGold, []);
+    out.printOpts = json_(b.printOpts, {});
+    ['gstPct', 'subtotal', 'tax', 'roundOff', 'invoiceTotal', 'oldValue', 'net', 'cash', 'upi', 'udhaar'].forEach(function (k) { out[k] = num_(b[k]); });
+    delete out.costTotal;
+    out.shop = shops[b.type] || shops.EST;
+    var c = custs[b.customerId];
+    out.customer = c ? { name: customerName_(c), mobile: c.mobile, village: c.village, address: c.address } : null;
+    out.rate = rateFor(b.date);
+    return out;
+  });
+  var totals = { count: bills.length, taxable: 0, tax: 0, total: 0 };
+  bills.forEach(function (b) { totals.taxable += b.subtotal; totals.tax += b.tax; totals.total += b.invoiceTotal; });
+  totals.taxable = round2_(totals.taxable); totals.tax = round2_(totals.tax); totals.total = round2_(totals.total);
+  return { from: from, to: to, bills: bills, totals: totals };
 }
 
 /* ===== 12_loans.js ===== */
@@ -1985,6 +2107,9 @@ function reportDaily_(date) {
   var oldBought = rows_('OldGold').filter(function (g) { return g.date === date && g.status !== 'void'; });
   var booked = rows_('Orders').filter(function (o) { return o.date === date && o.status !== 'cancelled'; });
   var cash = cashList_({ from: date, to: date });
+  // Optional (Settings): GST under reverse charge on old gold bought from customers, for the shop's accountant.
+  var rcmOn = settings_().oldgold_rcm === 'true';
+  var rcmBase = rcmOn ? oldBought.filter(function (g) { return g.source !== 'sale'; }).reduce(function (a, g) { return a + num_(g.amount); }, 0) : 0;
   var profit = salesProfit + interest + repairProfit + makingProfit + meltGain + otherIncome - expenses;
   return {
     date: date,
@@ -2003,6 +2128,7 @@ function reportDaily_(date) {
       silverWeight: round3_(oldBought.filter(function (g) { return g.metal === 'silver'; }).reduce(function (a, g) { return a + num_(g.weight); }, 0)),
       amount: Math.round(oldBought.reduce(function (a, g) { return a + num_(g.amount); }, 0)) },
     orders: { booked: booked.length, delivered: delivered.length },
+    rcm: rcmOn ? { base: Math.round(rcmBase), gst: round2_(rcmBase * 0.03) } : null,
     repairs: { delivered: repairs.length },
     cash: { opening: cash.opening, cashIn: cash.cashIn, cashOut: cash.cashOut, closing: cash.closing,
       upiIn: cash.upiIn, upiOut: cash.upiOut }
@@ -2341,6 +2467,108 @@ function migrateDues_() {
     delete _rowsCache.Dues;
   }
   setSetting_('dues_v', '1');
+}
+
+/* ===== 17_exports.js ===== */
+/* ---------- Excel / CSV export of any list ---------- */
+
+/**
+ * export.list {module, from, to} -> {title, columns, rows}
+ * The app turns this into a CSV file that opens in Excel / Google Sheets.
+ * Purchase cost and profit columns go only to the owner.
+ */
+function exportList_(user, d) {
+  var owner = user && user.role === 'owner';
+  var from = d.from ? readDate_(d.from) : '0000-00-00';
+  var to = d.to ? readDate_(d.to) : '9999-99-99';
+  var inRange = function (date) { return date >= from && date <= to; };
+  var m = String(d.module || '');
+  var out;
+  if (m === 'bills') {
+    out = {
+      title: 'Bills', columns: ['Date', 'Bill no', 'Type', 'Customer', 'Mobile', 'Village', 'Items', 'Net wt (g)', 'Taxable / items', 'GST %',
+        'CGST', 'SGST', 'Round off', 'Invoice total', 'Old gold', 'Net', 'Cash', 'UPI', 'Baki', 'Status', 'Note'],
+      rows: rows_('Sales').filter(function (b) { return inRange(b.date) && (!d.type || d.type === 'all' || b.type === d.type); }).map(function (b) {
+        var lines = json_(b.lines, []);
+        var tax = num_(b.tax), cg = Math.round(tax / 2 * 100) / 100;
+        return [b.date, b.billNo, b.type === 'GST' ? 'GST' : 'Quotation', b.customerName, b.mobile, b.village,
+          lines.map(function (l) { return l.name; }).join(', '), round3_(lines.reduce(function (a, l) { return a + num_(l.weight); }, 0)),
+          num_(b.subtotal), num_(b.gstPct), cg, round2_(tax - cg), num_(b.roundOff), num_(b.invoiceTotal), num_(b.oldValue), num_(b.net),
+          num_(b.cash), num_(b.upi), num_(b.udhaar), b.status === 'void' ? 'Cancelled' : 'OK', b.notes || ''];
+      })
+    };
+  } else if (m === 'girvi') {
+    var list = loansList_({ status: d.status || 'all' }).filter(function (l) { return inRange(l.date); });
+    out = {
+      title: 'Girvi', columns: ['Date', 'Customer', 'Mobile', 'Item', 'Metal', 'Net wt (g)', 'Loan ₹', 'Rate ₹/100/month', 'Days',
+        'Interest due', 'Total due', 'Value today', 'Loan %', 'Status', 'Closed on'],
+      rows: list.map(function (l) {
+        return [l.date, l.customerName, l.mobile, l.item, l.metal, l.netWt, l.principal, l.ratePct, l.days, l.interestDue, l.totalDue,
+          l.valueToday, l.ltvPct, l.status, l.closedAt || ''];
+      })
+    };
+  } else if (m === 'oldgold') {
+    out = {
+      title: 'Old gold', columns: ['Date', 'Customer', 'Item', 'Metal', 'Weight (g)', 'Cut %', 'Customer fine (g)', 'Rate', 'Amount',
+        'From', 'Status'].concat(owner ? ['Our purity %', 'Our fine (g)'] : []),
+      rows: rows_('OldGold').filter(function (g) { return inRange(g.date) && g.status !== 'void'; }).map(function (g) {
+        return [g.date, g.customerName, g.item, g.metal, num_(g.weight), num_(g.cutPct), num_(g.customerFine), num_(g.rate), num_(g.amount),
+          g.source === 'sale' ? 'In a bill' : 'Bought', g.status].concat(owner ? [num_(g.ourPurityPct), num_(g.ourFine)] : []);
+      })
+    };
+  } else if (m === 'orders') {
+    out = {
+      title: 'Orders', columns: ['Booked', 'Customer', 'Mobile', 'Item', 'Approx wt (g)', 'Final wt (g)', 'Rate', 'Making ₹/g', 'Price',
+        'Paid', 'Balance', 'Delivery date', 'Status', 'Delivered on'],
+      rows: rows_('Orders').filter(function (o) { return inRange(o.date); }).map(orderSummary_).map(function (o) {
+        return [o.date, o.customerName, o.mobile, o.item, o.estWt, o.finalWt || '', o.rate || 'Not fixed', o.makingPerG,
+          o.finalTotal || o.estTotal || '', o.paid, o.balance === null ? '' : o.balance, o.deliveryDate, o.status, o.deliveredAt || ''];
+      })
+    };
+  } else if (m === 'repairs') {
+    out = {
+      title: 'Repairs', columns: ['Date', 'Customer', 'Mobile', 'Item', 'Work', 'Weight in', 'Weight out', 'Customer charge',
+        'Karigar cost', 'Status', 'Given back on'],
+      rows: rows_('Repairs').filter(function (r) { return inRange(r.date); }).map(repairOut_).map(function (r) {
+        return [r.date, r.customerName, r.mobile, r.item, r.work, r.wtIn, r.wtOut || '', r.custCharge || r.estCustCharge,
+          r.karigarCost || r.estKarigarCost, r.status, r.deliveredAt || ''];
+      })
+    };
+  } else if (m === 'stock') {
+    out = {
+      title: 'Stock', columns: ['Tag', 'Item', 'Category', 'Metal', 'Purity %', 'Gross wt', 'Net wt', 'Pieces', 'Making ₹/g', 'Status', 'Added']
+        .concat(owner ? ['Our cost ₹'] : []),
+      rows: rows_('Items').filter(function (i) { return (d.status || 'in') === 'all' || i.status === (d.status || 'in'); }).map(function (i) {
+        return [i.tag, i.name, i.category, i.metal, num_(i.purityPct), num_(i.grossWt), num_(i.netWt), num_(i.pieces), num_(i.makingPerG),
+          i.status, String(i.addedAt).slice(0, 10)].concat(owner ? [num_(i.costTotal)] : []);
+      })
+    };
+  } else if (m === 'dues') {
+    var dl = duesList_({});
+    out = {
+      title: 'Baki', columns: ['Customer', 'Mobile', 'Village', 'Baki ₹', 'Since', 'Last entry'],
+      rows: dl.list.map(function (r) { return [r.customerName, r.mobile, r.village || '', r.due, r.since, r.last]; })
+    };
+  } else if (m === 'cash') {
+    out = {
+      title: 'Cash book', columns: ['Date', 'In / out', 'Mode', 'Amount', 'What', 'Note', 'By'],
+      rows: rows_('Cash').filter(function (c) { return inRange(c.date); }).map(function (c) {
+        return [c.date, c.dir === 'in' ? 'In' : 'Out', c.mode === 'upi' ? 'UPI' : 'Cash', num_(c.amount), c.category, c.notes, c.by];
+      })
+    };
+  } else if (m === 'customers') {
+    var due = {};
+    rows_('Dues').forEach(function (x) { due[x.customerId] = (due[x.customerId] || 0) + num_(x.amount); });
+    out = {
+      title: 'Customers', columns: ['First name', 'Surname', 'Mobile', 'Village', 'Address', 'Baki ₹'],
+      rows: rows_('Customers').map(function (c) { return [c.firstName, c.lastName, c.mobile, c.village, c.address, round2_(due[c.id] || 0)]; })
+    };
+  } else {
+    throw new Error('Nothing to export for ' + m);
+  }
+  out.from = d.from || '';
+  out.to = d.to || '';
+  return out;
 }
 
 /* ===== 20_setup.js ===== */

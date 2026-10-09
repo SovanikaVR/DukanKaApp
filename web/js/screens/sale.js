@@ -4,16 +4,39 @@ import { S, setting, list, purityFor, rateFor } from '../state.js';
 import { h, screen, field, card, grid, seg, busy, toast, num, inr, g3, sec, go, remember, modal, icon } from '../ui.js';
 import { customerPicker } from '../picker.js';
 import { t } from '../i18n.js';
+import { FIELD_LABELS } from '../bill.js';
 
 const KARATS = [{ value: '24K', label: '24K' }, { value: '22K', label: '22K' }, { value: '18K', label: '18K' }, { value: 'Silver', label: 'Ag' }];
 
 export async function render(params, query) {
   const gstReady = setting('gst_enabled', 'true') === 'true' && !!setting('shop_gstin');
   let type = gstReady && remember('bill_type') !== 'EST' ? 'GST' : 'EST';
-  const typeSeg = seg([{ value: 'GST', label: t('GST bill') }, { value: 'EST', label: t('Non-GST (estimate)') }], type, (v) => {
+  const typeSeg = seg([{ value: 'GST', label: t('GST bill') }, { value: 'EST', label: t('Non-GST (quotation)') }], type, (v) => {
     if (v === 'GST' && !gstReady) { toast('Add the shop GSTIN in Settings to make GST bills', 'err'); typeSeg.set('EST'); return; }
-    type = v; remember('bill_type', v); recalc();
+    type = v; remember('bill_type', v); recalc(); drawOpts();
   });
+  // Bill details: note, own bill number (for a missed / back-dated bill), date, what to print.
+  const note = field(t('Note on the bill (optional)'), { type: 'textarea', value: '' });
+  const billNo = field(t('Bill number (blank = next number)'), { value: '' });
+  const billDate = field(t('Bill date'), { type: 'date', value: S.today });
+  let printOpts = {};
+  const optsBox = h('div', { class: 'chips wrap' });
+  function drawOpts() {
+    let def = {};
+    try { def = JSON.parse(setting(type === 'GST' ? 'bill_fields_gst' : 'bill_fields_quote', '{}')); } catch (e) { /* ignore */ }
+    const cur = Object.assign({}, def, printOpts);
+    optsBox.replaceChildren(...FIELD_LABELS.map(([k, label]) => {
+      const c = h('button', { type: 'button', class: 'chip' + (cur[k] ? ' on' : ''), onclick: () => {
+        printOpts[k] = !cur[k]; drawOpts();
+      } }, t(label));
+      return c;
+    }));
+  }
+  drawOpts();
+  const details = h('details', { class: 'card fold' }, h('summary', null, t('Bill details: note, bill number, date, what to print')),
+    h('div', { class: 'stack' }, note, h('div', { class: 'grid g2' }, billNo, billDate),
+      h('div', { class: 'hint' }, t('Type a bill number only for a missed or back-dated bill. It must not be used before.')),
+      h('div', { class: 'lbl' }, t('Show on this bill')), optsBox));
   const picker = customerPicker(query);
   const names = h('datalist', { id: 'item-names' }, list('item_names').map((n) => h('option', { value: n })));
   const lines = [];
@@ -70,7 +93,8 @@ export async function render(params, query) {
   const save = h('button', { class: 'btn', onclick: () => busy(save, async () => {
     const who = picker.get();
     const payload = Object.assign({}, who, {
-      type, gstPct: gstPct.input.value,
+      type, gstPct: gstPct.input.value, notes: note.input.value.trim(), billNo: billNo.input.value.trim(),
+      date: billDate.input.value || S.today, printOpts,
       lines: lines.map((l) => l.get()), oldGold: olds.map((o) => o.get()),
       cash: last.net >= 0 ? num(cash.input.value) : num(cash.input.value),
       upi: num(upi.input.value), udhaar: last.net >= 0 ? num(udhaar.input.value) : 0
@@ -98,7 +122,7 @@ export async function render(params, query) {
       gstRow,
       sec(t('Old gold taken in') + ' · ' + t('right here, no separate entry')), oldBox,
       h('button', { class: 'add gold', type: 'button', onclick: addOld }, '+ Add old gold / silver'),
-      totalsBox, payNote, grid(3, cash, upi, udhaar),
+      totalsBox, payNote, grid(3, cash, upi, udhaar), details,
       h('div', { class: 'hint' }, t('Items typed by hand do not change stock. To sell a stock item, use "From stock".')),
       h('div', { class: 'hint' }, 'UPI fills itself with the rest. Put any unpaid amount in Baki — it shows in the Baki list until paid.')],
     [h('div', { class: 'kv foot-total' }, totalLabel, totalValue), save]);
@@ -107,18 +131,44 @@ export async function render(params, query) {
 /** One bill line. */
 function lineEditor(pref, onchange, onremove) {
   let karat = pref.karat || remember('sale_karat') || '22K';
+  const isSilver = () => karat === 'Silver';
+  const silverPurity = () => setting('purity_silver', '100');
   const name = field(t('Item name'), { value: pref.name || '' });
   name.input.setAttribute('list', 'item-names');
   let saveName = false;
   const saveBtn = h('button', { type: 'button', class: 'save-name', onclick: () => {
     saveName = !saveName; saveBtn.textContent = saveName ? 'Name saved ✓' : 'Save name'; saveBtn.classList.toggle('done', saveName);
   } }, 'Save name');
-  const purity = field(t('Purity %'), { max: 100, type: 'num', value: pref.purityPct || purityFor(karat), oninput: onchange });
-  const weight = field(t('Weight (g)'), { type: 'num', value: pref.weight || '', oninput: onchange });
-  const rate = field(t('Rate ₹/g'), { type: 'num', value: pref.rate || rateFor(karat), oninput: onchange });
-  const making = field(t('Making ₹/g'), { type: 'num', value: pref.makingPerG ?? (remember('making') || setting('making_default_per_g', '150')), oninput: onchange });
+  const purity = field(t('Purity %'), { max: 100, type: 'num', value: pref.purityPct || (karat === 'Silver' ? silverPurity() : purityFor(karat)), oninput: onchange });
+  const weight = field(t('Net weight (g)'), { type: 'num', value: pref.weight || '', oninput: () => { if (!grossTouched) gross.input.value = weight.input.value; onchange(); } });
+  let grossTouched = !!pref.grossWt;
+  const gross = field(t('Gross weight (g)'), { type: 'num', value: pref.grossWt || pref.weight || '', oninput: () => { grossTouched = true; } });
+  // Rate is typed the way the shop writes it (Settings → rate per 10 g / per kg, or per gram); kept per gram inside.
+  const per10 = setting('bill_rate_unit', '10g') !== 'g';
+  const factor = () => (per10 ? (isSilver() ? 1000 : 10) : 1);
+  const show = (perG) => (perG === '' || perG === undefined || perG === null ? '' : String(Math.round(num(perG) * factor() * 100) / 100));
+  const rate = field(t('Rate ₹/g'), { type: 'num', value: show(pref.rate || rateFor(karat)), oninput: onchange });
+  const rLabel = () => { rate.querySelector('.lbl').textContent = !per10 ? t('Rate ₹/g') : isSilver() ? t('Rate ₹/kg') : t('Rate ₹/10 g'); };
+  rLabel();
+  const rateG = () => num(rate.input.value) / factor();
+  // Making: ₹ per gram, % of the metal value, or one fixed ₹ amount. Remembered separately for gold and silver.
+  const mkKey = () => (isSilver() ? 'making_silver' : 'making');
+  const mkDefault = () => (isSilver() ? setting('making_default_silver', '0')
+    : setting('making_default_type', 'perg') === 'pct' ? '' : setting('making_default_per_g', '150'));
+  let mType = pref.makingType || remember(mkKey() + '_type') || (isSilver() ? 'perg' : setting('making_default_type', 'perg'));
+  const mkVal = () => (mType === 'pct' ? (remember(mkKey() + '_pct') || setting('making_default_pct', ''))
+    : mType === 'fixed' ? '' : (remember(mkKey()) || mkDefault()));
+  const making = field(t('Making'), { type: 'num', value: pref.makingPerG ?? mkVal(), oninput: onchange });
+  const mLabel = () => { making.querySelector('.lbl').textContent = mType === 'pct' ? t('Making %') : mType === 'fixed' ? t('Making ₹ (whole piece)') : t('Making ₹/g'); };
+  const mSeg = seg([{ value: 'perg', label: '₹/g' }, { value: 'pct', label: '%' }, { value: 'fixed', label: '₹' }], mType, (v) => {
+    mType = v; making.input.value = mkVal(); mLabel(); onchange(); draw();
+  });
+  mLabel();
   const kseg = seg(KARATS, karat, (v) => {
-    karat = v; purity.input.value = purityFor(v) || (v === 'Silver' ? '100' : ''); rate.input.value = rateFor(v); onchange();
+    const wasSilver = isSilver();
+    karat = v; purity.input.value = isSilver() ? silverPurity() : purityFor(v); rate.input.value = show(rateFor(v)); rLabel();
+    if (wasSilver !== isSilver()) { mType = remember(mkKey() + '_type') || 'perg'; mSeg.set(mType); making.input.value = mkVal(); mLabel(); }
+    onchange(); draw();
   });
   const total = h('div', { class: 'kv strong' });
   const isLot = pref.itemId && pref.lotPieces > 1;
@@ -129,25 +179,38 @@ function lineEditor(pref, onchange, onremove) {
     h('div', { class: 'line-top' }, name, saveBtn, h('button', { type: 'button', class: 'x', 'aria-label': 'Remove item', onclick: onremove }, '×')),
     tag,
     h('div', { class: 'karat-row' }, kseg, purity),
-    grid(3, weight, rate, making),
+    grid(3, weight, gross, rate),
+    h('div', { class: 'mk-row' }, making, h('div', { class: 'f' }, h('span', { class: 'lbl' }, t('Making as')), mSeg)),
     pieces,
     total);
   // Weight of a stock piece is filled in; it can be changed (weighed again, or part of a loose lot sold).
-  const amount = () => {
-    const w = num(weight.input.value);
-    try { return Math.round(Calc.evalFormula(setting('formula_sale_line'), { Weight: w, Rate: num(rate.input.value), Making: num(making.input.value) }) * 100) / 100; }
-    catch (e) { return 0; }
+  const parts = () => {
+    const w = num(weight.input.value), rt = rateG(), mk = num(making.input.value);
+    const metal = Math.round(w * rt * 100) / 100;
+    if (mType === 'pct') { const m = Math.round(metal * mk) / 100; return { metal, making: m, amount: Math.round((metal + m) * 100) / 100 }; }
+    if (mType === 'fixed') return { metal, making: mk, amount: Math.round((metal + mk) * 100) / 100 };
+    let a = 0;
+    try { a = Math.round(Calc.evalFormula(setting('formula_sale_line'), { Weight: w, Rate: rt, Making: mk }) * 100) / 100; } catch (e) { /* ignore */ }
+    return { metal, making: Math.round((a - metal) * 100) / 100, amount: a };
   };
+  const amount = () => parts().amount;
   const obj = {
     el, amount,
     get: () => ({ itemId: pref.itemId || '', name: name.input.value.trim() || 'Item', metal: karat === 'Silver' ? 'silver' : 'gold',
-      purityPct: purity.input.value, weight: weight.input.value, rate: rate.input.value, makingPerG: making.input.value, saveName,
+      purityPct: purity.input.value, weight: weight.input.value, grossWt: gross.input.value || weight.input.value, rate: String(Math.round(rateG() * 10000) / 10000),
+      makingType: mType, makingPerG: mType === 'perg' ? making.input.value : 0, makingPct: mType === 'pct' ? making.input.value : '',
+      makingFixed: mType === 'fixed' ? making.input.value : '', saveName,
       pieces: pieces ? pieces.input.value : undefined }),
-    rememberValues: () => { remember('making', making.input.value); remember('sale_karat', karat); }
+    rememberValues: () => {
+      remember(mkKey() + '_type', mType);
+      if (mType === 'perg') remember(mkKey(), making.input.value);
+      if (mType === 'pct') remember(mkKey() + '_pct', making.input.value);
+      remember('sale_karat', karat);
+    }
   };
   const draw = () => {
-    const w = num(weight.input.value);
-    total.replaceChildren(h('span', null, t('Gold') + ' ' + inr(w * num(rate.input.value)) + ' + ' + t('making') + ' ' + inr(w * num(making.input.value))), h('span', null, inr(amount(), 2)));
+    const p = parts();
+    total.replaceChildren(h('span', null, t(isSilver() ? 'Silver' : 'Gold') + ' ' + inr(p.metal) + ' + ' + t('making') + ' ' + inr(p.making)), h('span', null, inr(p.amount, 2)));
   };
   [weight, rate, making].forEach((f) => f.input.addEventListener('input', draw));
   draw();
@@ -217,7 +280,7 @@ async function pickFromStock(addLine, taken = []) {
   if (!ok || !chosen) return;
   const karat = chosen.metal === 'silver' ? 'Silver' : (chosen.purityPct >= 99 ? '24K' : chosen.purityPct >= 90 ? '22K' : '18K');
   const lot = chosen.pieces > 1;
-  addLine({ itemId: chosen.id, tag: chosen.tag, name: chosen.name, weight: lot ? '' : chosen.netWt, purityPct: chosen.purityPct,
+  addLine({ itemId: chosen.id, tag: chosen.tag, name: chosen.name, weight: lot ? '' : chosen.netWt, grossWt: lot ? '' : chosen.grossWt, purityPct: chosen.purityPct,
     lotPieces: chosen.pieces, lotWt: chosen.netWt,
     karat, makingPerG: chosen.makingPerG || (chosen.metal === 'silver' ? 0 : undefined) });
 }

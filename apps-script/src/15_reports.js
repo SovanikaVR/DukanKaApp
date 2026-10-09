@@ -43,6 +43,9 @@ function reportDaily_(date) {
   var oldBought = rows_('OldGold').filter(function (g) { return g.date === date && g.status !== 'void'; });
   var booked = rows_('Orders').filter(function (o) { return o.date === date && o.status !== 'cancelled'; });
   var cash = cashList_({ from: date, to: date });
+  // Optional (Settings): GST under reverse charge on old gold bought from customers, for the shop's accountant.
+  var rcmOn = settings_().oldgold_rcm === 'true';
+  var rcmBase = rcmOn ? oldBought.filter(function (g) { return g.source !== 'sale'; }).reduce(function (a, g) { return a + num_(g.amount); }, 0) : 0;
   var profit = salesProfit + interest + repairProfit + makingProfit + meltGain + otherIncome - expenses;
   return {
     date: date,
@@ -61,6 +64,7 @@ function reportDaily_(date) {
       silverWeight: round3_(oldBought.filter(function (g) { return g.metal === 'silver'; }).reduce(function (a, g) { return a + num_(g.weight); }, 0)),
       amount: Math.round(oldBought.reduce(function (a, g) { return a + num_(g.amount); }, 0)) },
     orders: { booked: booked.length, delivered: delivered.length },
+    rcm: rcmOn ? { base: Math.round(rcmBase), gst: round2_(rcmBase * 0.03) } : null,
     repairs: { delivered: repairs.length },
     cash: { opening: cash.opening, cashIn: cash.cashIn, cashOut: cash.cashOut, closing: cash.closing,
       upiIn: cash.upiIn, upiOut: cash.upiOut }

@@ -5,6 +5,7 @@ import { h, screen, field, card, grid, seg, busy, toast, num, inr, fdate, g3, se
 import { customerPicker } from '../picker.js';
 import { receiptHtml, docActions } from '../bill.js';
 import { t } from '../i18n.js';
+import { exportCsvButton } from './exports.js';
 
 export async function list(params, query) {
   let status = query.s || 'open';
@@ -30,7 +31,7 @@ export async function list(params, query) {
   q.input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 300); });
   run();
   return screen(t('Girvi Loan'), 'Oldest first · shaded = over 12 months', [tabs, q, summary, out],
-    isViewer() ? null : h('a', { class: 'btn', href: '#/loan-new' }, '+ New girvi loan'));
+    isViewer() ? null : h('a', { class: 'btn', href: '#/loan-new' }, '+ New girvi loan'), { right: exportCsvButton('girvi', () => ({ status })) });
 }
 
 export async function create(params, query) {

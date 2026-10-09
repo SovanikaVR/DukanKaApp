@@ -1,12 +1,12 @@
 /* Service worker: keeps the app screens on the phone so it opens fast. Shop data always comes live. */
-const VERSION = 'dk-v1.2.0';
+const VERSION = 'dk-v1.3.0';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css', './js/calc.js', './js/main.js', './js/api.js',
-  './js/ui.js', './js/i18n.js', './js/i18n-hi.js', './js/help-content.js', './js/state.js', './js/picker.js', './js/bill.js',
+  './js/ui.js', './js/i18n.js', './js/i18n-hi.js', './js/help-content.js', './js/xlsx.js', './js/state.js', './js/picker.js', './js/bill.js',
   './js/screens/start.js', './js/screens/rate.js', './js/screens/customers.js', './js/screens/sale.js',
   './js/screens/billview.js', './js/screens/oldgold.js', './js/screens/loans.js', './js/screens/orders.js',
   './js/screens/repairs.js', './js/screens/stock.js', './js/screens/melt.js', './js/screens/parties.js',
-  './js/screens/cash.js', './js/screens/reports.js', './js/screens/settings.js', './js/screens/dues.js', './js/screens/help.js',
+  './js/screens/cash.js', './js/screens/reports.js', './js/screens/settings.js', './js/screens/dues.js', './js/screens/help.js', './js/screens/exports.js',
   './icons/icon-192.png', './icons/icon-512.png'
 ];
 

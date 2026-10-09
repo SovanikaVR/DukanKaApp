@@ -2,6 +2,7 @@
 import { call } from '../api.js';
 import { S, isViewer } from '../state.js';
 import { h, screen, field, card, grid, busy, toast, num, inr, fdate, g3, sec, go, empty } from '../ui.js';
+import { exportCsvButton } from './exports.js';
 
 export async function render() {
   const [fine, old, melts] = await Promise.all([call('fine.summary'), call('oldgold.list', { status: 'stock' }), call('melt.list')]);
@@ -49,5 +50,5 @@ export async function render() {
       h('div', { class: 'kv' }, h('b', null, fdate(m.date) + ' · ' + m.items + ' items'), h('b', null, g3(m.actualFine) + ' g fine')),
       h('div', { class: 'kv muted' }, h('span', null, 'Bar ' + g3(m.barWt) + ' g @ ' + m.purityPct + '%'),
         h('span', { class: m.vsPaidG >= 0 ? 'good' : 'bad' }, (m.vsPaidG >= 0 ? '+' : '') + g3(m.vsPaidG) + ' g vs paid')))) : empty('No batches yet')
-  ], isViewer() || !gold.length ? null : save);
+  ], isViewer() || !gold.length ? null : save, { right: exportCsvButton('oldgold', () => ({})) });
 }

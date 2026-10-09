@@ -249,3 +249,13 @@ a.row-card:hover { border-color: var(--navy); }
 .spinner { width: 22px; height: 22px; border: 3px solid var(--line); border-top-color: var(--navy); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media print { .toast, .modal-wrap { display: none; } }
+/* folding card + wrapping chips */
+details.fold > summary { cursor: pointer; font-weight: 600; color: var(--navy); min-height: 28px; list-style-position: inside; }
+details.fold[open] > summary { margin-bottom: 8px; }
+.chips.wrap, details.fold .chips { flex-wrap: wrap; overflow: visible; }
+.progress { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.progress > div { height: 100%; background: var(--navy); width: 0; transition: width .3s; }
+.top .btn2.small { min-height: 36px; padding: 0 10px; background: transparent; color: var(--white); border-color: rgba(255,255,255,.5); font-size: 13px; }
+.logo-row { display: flex; gap: 12px; align-items: center; }
+.logo-prev { width: 64px; height: 64px; object-fit: contain; border: 1px dashed var(--line-2); border-radius: 10px; background: var(--white); }
+.mk-row { display: grid; grid-template-columns: 1fr 1.3fr; gap: 10px; align-items: end; }

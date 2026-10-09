@@ -3,6 +3,7 @@ import { call } from '../api.js';
 import { isOwner, isViewer } from '../state.js';
 import { h, screen, card, busy, toast, inr, fdate, empty, go, ask, field, todayStr } from '../ui.js';
 import { t } from '../i18n.js';
+import { exportCsvButton } from './exports.js';
 
 const FROM = { sale: 'Bill', order: 'Order', repair: 'Repair', loan: 'Girvi', payment: 'Paid', adjust: 'Adjusted', 'sale-cancel': 'Bill cancelled' };
 
@@ -41,7 +42,7 @@ export async function render(params, query) {
     q,
     card(h('div', { class: 'due-total' }, h('span', { class: 'muted' }, t('Total baki')), h('span', { class: 'big bad' }, inr(d.total)))),
     rows.length ? rows : empty(t('Nobody owes anything. 👍'))
-  ]);
+  ], null, { right: exportCsvButton('dues', () => ({})) });
 }
 
 async function pay(r) {
