@@ -10,7 +10,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.7.0';
+var APP_VERSION = '1.8.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -19,12 +19,12 @@ var SCHEMA = {
   Rates: ['id', 'date', 'g24', 'g22', 'g18', 'silver', 'by', 'at'],
   Customers: ['id', 'firstName', 'lastName', 'mobile', 'village', 'address', 'notes', 'createdAt', 'by'],
   Items: ['id', 'tag', 'name', 'category', 'metal', 'purityPct', 'grossWt', 'netWt', 'pieces',
-    'makingPerG', 'costTotal', 'status', 'source', 'sourceId', 'soldBillId', 'addedAt', 'by'],
+    'makingPerG', 'costTotal', 'status', 'source', 'sourceId', 'soldBillId', 'addedAt', 'by', 'photoId'],
   Sales: ['id', 'billNo', 'type', 'fy', 'date', 'customerId', 'customerName', 'mobile', 'village',
     'lines', 'oldGold', 'gstPct', 'subtotal', 'tax', 'roundOff', 'invoiceTotal', 'oldValue', 'net',
     'cash', 'upi', 'udhaar', 'costTotal', 'status', 'by', 'at', 'notes', 'printOpts'],
   OldGold: ['id', 'date', 'customerId', 'customerName', 'source', 'billId', 'item', 'metal', 'weight',
-    'cutPct', 'customerFine', 'rate', 'amount', 'ourPurityPct', 'ourFine', 'status', 'meltId', 'by', 'at'],
+    'cutPct', 'customerFine', 'rate', 'amount', 'ourPurityPct', 'ourFine', 'status', 'meltId', 'by', 'at', 'lossG'],
   Loans: ['id', 'date', 'customerId', 'customerName', 'mobile', 'item', 'metal', 'purityPct',
     'grossWt', 'netWt', 'principal', 'ratePct', 'formula', 'minDays', 'status', 'closedAt',
     'notes', 'by', 'at', 'mode'],
@@ -37,10 +37,10 @@ var SCHEMA = {
     'karigarRateType', 'karigarRate', 'custRateType', 'custRate', 'deliveryDate', 'status', 'wtOut',
     'karigarCost', 'custCharge', 'returnedAt', 'deliveredAt', 'notes', 'by', 'at'],
   Melts: ['id', 'date', 'oldGoldIds', 'totalWt', 'ourFine', 'paidFine', 'paidAmount', 'barWt',
-    'purityPct', 'actualFine', 'cost', 'notes', 'by', 'at'],
-  FineLedger: ['id', 'date', 'type', 'grams', 'value', 'refType', 'refId', 'notes', 'by', 'at'],
+    'purityPct', 'actualFine', 'cost', 'notes', 'by', 'at', 'metal', 'lossG', 'refineLossG'],
+  FineLedger: ['id', 'date', 'type', 'grams', 'value', 'refType', 'refId', 'notes', 'by', 'at', 'metal'],
   Parties: ['id', 'type', 'name', 'mobile', 'notes', 'active', 'createdAt'],
-  PartyLedger: ['id', 'partyId', 'date', 'type', 'goldG', 'cash', 'rate', 'refType', 'refId', 'notes', 'by', 'at'],
+  PartyLedger: ['id', 'partyId', 'date', 'type', 'goldG', 'cash', 'rate', 'refType', 'refId', 'notes', 'by', 'at', 'silverG'],
   Cash: ['id', 'date', 'dir', 'mode', 'amount', 'category', 'refType', 'refId', 'notes', 'by', 'at', 'status'],
   Dues: ['id', 'date', 'customerId', 'customerName', 'mobile', 'amount', 'refType', 'refId', 'notes', 'by', 'at'],
   Audit: ['at', 'user', 'action', 'ref', 'details']
@@ -69,6 +69,7 @@ var DEFAULT_SETTINGS = {
   quote_phones: '',
   quote_logo: '',
   quote_footer: '',
+  baki_msg: '',
   bill_lang: 'en',
   bill_template: 'classic',
   bill_color: 'gold',
@@ -114,7 +115,7 @@ var DEFAULT_SETTINGS = {
 var OWNER_ONLY = {
   'settings.save': 1, 'users.list': 1, 'users.save': 1, 'sale.void': 1, 'cash.opening': 1,
   'admin.archive': 1, 'admin.backupNow': 1, 'loans.edit': 1, 'loans.void': 1,
-  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'admin.check': 1, 'stock.update': 1, 'dues.adjust': 1
+  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'admin.check': 1, 'stock.update': 1, 'dues.adjust': 1, 'customers.import': 1
 };
 
 /* ===== 01_util.js ===== */
@@ -656,8 +657,11 @@ var ROUTES = {
   'stock.list': function (u, d) { return stockList_(d).map(function (i) { if (u.role !== 'owner') i.costTotal = null; return i; }); },
   'stock.summary': function () { return stockSummary_(); },
   'stock.update': function (u, d) { return stockUpdate_(u, d); },
+  'stock.photoSet': function (u, d) { return stockPhotoSet_(u, d); },
+  'stock.photo': function (u, d) { return stockPhoto_(d); },
+  'customers.import': function (u, d) { return customersImport_(u, d); },
   'melt.create': function (u, d) { return meltCreate_(u, d); },
-  'melt.list': function (u) { var m = meltList_(); if (u.role !== 'owner') m.forEach(function (x) { delete x.gain; delete x.gainValue; delete x.cost; delete x.paidAmount; }); return m; },
+  'melt.list': function (u, d) { var m = meltList_(d); if (u.role !== 'owner') m.forEach(function (x) { delete x.gain; delete x.gainValue; delete x.cost; delete x.paidAmount; }); return m; },
   'fine.summary': function () { return fineSummary_(); },
   'parties.list': function (u, d) { return partiesList_(d); },
   'parties.save': function (u, d) { return partySave_(u, d); },
@@ -690,7 +694,7 @@ var ROUTES = {
 var READ_ONLY = {
   'ping': 1, 'bootstrap': 1, 'rates.list': 1, 'customers.search': 1, 'customers.get': 1, 'sale.list': 1,
   'sale.get': 1, 'oldgold.list': 1, 'loans.list': 1, 'loans.get': 1, 'orders.list': 1, 'orders.get': 1,
-  'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'melt.list': 1, 'fine.summary': 1,
+  'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'stock.photo': 1, 'melt.list': 1, 'fine.summary': 1,
   'parties.list': 1, 'parties.ledger': 1, 'cash.list': 1, 'reports.daily': 1, 'reports.month': 1,
   'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1, 'admin.check': 1, 'sale.export': 1, 'export.list': 1
 };
@@ -766,7 +770,7 @@ function bumpDataVersion_() {
   try { CacheService.getScriptCache().put('dataver', String(Date.now()) + Math.random().toString(36).slice(2, 6), 21600); } catch (e) { /* ignore */ }
 }
 
-var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1, 'admin.check': 1 };
+var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1, 'admin.check': 1, 'stock.photo': 1 };
 
 function cachedRead_(action, user, data, run) {
   if (NO_READ_CACHE[action]) return run();
@@ -934,6 +938,43 @@ function customerSave_(user, d) {
   return rec;
 }
 
+/**
+ * Many customers at once (from an Excel / CSV file or the phone's contacts). Up to 500 per call.
+ * A customer already saved (same mobile and first name) is skipped, so importing the same file twice is safe.
+ * An opening baki in the file goes to the Baki list as "Opening baki".
+ */
+function customersImport_(user, d) {
+  var list = (d.rows || []).slice(0, 500);
+  req_(list.length, 'Nothing to import');
+  var seen = {};
+  rows_('Customers').forEach(function (c) { if (c.mobile) seen[c.mobile + '|' + c.firstName.toLowerCase()] = 1; });
+  var add = [], dues = [], skipped = [], date = today_(), bakiTotal = 0;
+  list.forEach(function (r, i) {
+    var first = String(r.firstName || '').trim(), last = String(r.lastName || '').trim();
+    if (!first && last) { first = last; last = ''; }
+    var mobile = cleanMobile_(r.mobile);
+    if (!first) { skipped.push({ row: r.row || i + 1, reason: 'no name' }); return; }
+    if (mobile && mobile.length !== 10) { skipped.push({ row: r.row || i + 1, name: first, reason: 'mobile is not 10 digits' }); return; }
+    var key = mobile + '|' + first.toLowerCase();
+    if (mobile && seen[key]) { skipped.push({ row: r.row || i + 1, name: first, reason: 'already saved' }); return; }
+    seen[key] = 1;
+    var baki = round2_(num_(String(r.baki || '').replace(/[₹,\s]/g, '')));
+    var rec = { id: uid_('K'), firstName: first.slice(0, 60), lastName: last.slice(0, 60), mobile: mobile,
+      village: String(r.village || '').trim().slice(0, 60), address: String(r.address || '').trim().slice(0, 200),
+      notes: String(r.notes || '').trim().slice(0, 200), createdAt: nowIso_(), by: user.username };
+    add.push(rec);
+    if (baki > 0) {
+      bakiTotal += baki;
+      dues.push({ id: uid_('D'), date: date, customerId: rec.id, customerName: customerName_(rec), mobile: mobile, amount: baki,
+        refType: 'adjust', refId: '', notes: 'Opening baki', by: user.username, at: nowIso_() });
+    }
+  });
+  insertMany_('Customers', add);
+  insertMany_('Dues', dues);
+  audit_(user, 'customers.import', '', { added: add.length, skipped: skipped.length, baki: bakiTotal });
+  return { added: add.length, skipped: skipped, bakiCustomers: dues.length, baki: round2_(bakiTotal) };
+}
+
 /** Uses d.customerId, or creates/finds the customer described in d.customer. */
 function ensureCustomer_(user, d) {
   if (d.customerId) {
@@ -1032,18 +1073,22 @@ function customerGet_(id) {
 
 function oldGoldCalc_(g) {
   var weight = pos_(g.weight, 'Old gold weight');
+  // Less: stones, dirt, expected melting loss — taken off before the fine is worked out.
+  var loss = round3_(pos_(g.lossG, 'Weight loss'));
+  req_(loss < weight || !weight, 'Weight loss should be less than the weight');
+  var net = round3_(weight - loss);
   var cut = pos_(g.cutPct, 'Cut %');
   var rate = pos_(g.rate, 'Rate');
   var purity = g.ourPurityPct === '' || g.ourPurityPct === undefined ? num_(settings_().standard_purity_pct) : pos_(g.ourPurityPct, 'Purity');
   req_(cut <= 100, 'Cut % should be between 0 and 100');
   req_(purity <= 100, 'Purity % should be between 0 and 100');
   pos_(g.amount, 'Old gold amount');
-  var customerFine = round3_(Calc.evalFormula(formula_('formula_old_fine'), { Weight: weight, Cut: cut }));
-  var ourFine = round3_(Calc.evalFormula(formula_('formula_our_fine'), { Weight: weight, Purity: purity }));
+  var customerFine = round3_(Calc.evalFormula(formula_('formula_old_fine'), { Weight: net, Cut: cut }));
+  var ourFine = round3_(Calc.evalFormula(formula_('formula_our_fine'), { Weight: net, Purity: purity }));
   var amount = g.amount !== undefined && g.amount !== '' ? Math.round(num_(g.amount)) : Math.round(customerFine * rate);
   return {
     item: String(g.item || 'Old item').trim(), metal: g.metal === 'silver' ? 'silver' : 'gold',
-    weight: round3_(weight), cutPct: cut, customerFine: customerFine, rate: rate, amount: amount,
+    weight: round3_(weight), lossG: loss, cutPct: cut, customerFine: customerFine, rate: rate, amount: amount,
     ourPurityPct: purity, ourFine: ourFine
   };
 }
@@ -1198,7 +1243,7 @@ function saleCreate_(user, d) {
       id: uid_('G'), date: date, customerId: c.id, customerName: customerName_(c), source: 'sale', billId: id,
       item: g.item, metal: g.metal, weight: g.weight, cutPct: g.cutPct, customerFine: g.customerFine,
       rate: g.rate, amount: g.amount, ourPurityPct: g.ourPurityPct, ourFine: g.ourFine, status: 'stock',
-      meltId: '', by: user.username, at: nowIso_()
+      meltId: '', by: user.username, at: nowIso_(), lossG: g.lossG || 0
     });
   });
   var dir = net >= 0 ? 'in' : 'out';
@@ -1323,7 +1368,7 @@ function oldGoldBuy_(user, d) {
       id: id, date: date, customerId: c.id, customerName: customerName_(c), source: 'purchase', billId: '',
       item: g.item, metal: g.metal, weight: g.weight, cutPct: g.cutPct, customerFine: g.customerFine,
       rate: g.rate, amount: g.amount, ourPurityPct: g.ourPurityPct, ourFine: g.ourFine, status: 'stock',
-      meltId: '', by: user.username, at: nowIso_()
+      meltId: '', by: user.username, at: nowIso_(), lossG: g.lossG || 0
     });
   });
   cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', total, 'old-gold', 'oldgold', ids[0], customerName_(c), date);
@@ -1345,7 +1390,7 @@ function oldGoldList_(d) {
     .slice().reverse().map(function (g) {
       return {
         id: g.id, date: g.date, customerName: g.customerName, item: g.item, metal: g.metal,
-        weight: num_(g.weight), cutPct: num_(g.cutPct), customerFine: num_(g.customerFine), amount: num_(g.amount),
+        weight: num_(g.weight), lossG: num_(g.lossG), cutPct: num_(g.cutPct), customerFine: num_(g.customerFine), amount: num_(g.amount),
         ourPurityPct: num_(g.ourPurityPct), ourFine: num_(g.ourFine), status: g.status, source: g.source
       };
     });
@@ -1979,93 +2024,162 @@ function stockUpdate_(user, d) {
   return itemOut_(saved);
 }
 
+/* ---------- Stock photos: kept in Google Drive (folder "DukanKaApp Photos"), never in the sheet,
+ * and loaded only when someone opens that item — so lists stay as fast as before. */
+function photoFolder_() {
+  var s = settings_();
+  if (s.photo_folder) { try { return DriveApp.getFolderById(s.photo_folder); } catch (e) { /* deleted: make again */ } }
+  var f = DriveApp.createFolder('DukanKaApp Photos');
+  setSetting_('photo_folder', f.getId());
+  return f;
+}
+
+function stockPhotoSet_(user, d) {
+  var i = find_('Items', d.id);
+  req_(i, 'Item not found');
+  var m = /^data:image\/jpeg;base64,(.+)$/.exec(String(d.data || ''));
+  if (d.data) req_(m && m[1].length < 400000, 'Photo is too big');
+  if (i.photoId) { try { DriveApp.getFileById(i.photoId).setTrashed(true); } catch (e) { /* already gone */ } }
+  var id = '';
+  if (m) {
+    var blob = Utilities.newBlob(Utilities.base64Decode(m[1]), 'image/jpeg', (i.tag || i.id) + '.jpg');
+    id = photoFolder_().createFile(blob).getId();
+  }
+  update_('Items', i.id, { photoId: id });
+  audit_(user, 'stock.photo', i.id, { photo: !!id });
+  return { id: i.id, photoId: id };
+}
+
+function stockPhoto_(d) {
+  var i = find_('Items', d.id);
+  req_(i && i.photoId, 'No photo');
+  var blob = DriveApp.getFileById(i.photoId).getBlob();
+  return { id: i.id, photoId: i.photoId, data: 'data:image/jpeg;base64,' + Utilities.base64Encode(blob.getBytes()) };
+}
+
 /* ---------- Melting and fine gold stock ---------- */
 
-function fineEntry_(user, type, grams, value, refType, refId, notes, date) {
+/** Fine stock is kept per metal: blank metal = gold (entries made before silver was added). */
+function fineMetal_(f) { return f.metal === 'silver' ? 'silver' : 'gold'; }
+
+function fineEntry_(user, type, grams, value, refType, refId, notes, date, metal) {
   return insert_('FineLedger', {
     id: uid_('F'), date: validDate_(date), type: type, grams: round3_(grams), value: round2_(value),
-    refType: refType || '', refId: refId || '', notes: notes || '', by: user ? user.username : '', at: nowIso_()
+    refType: refType || '', refId: refId || '', notes: notes || '', by: user ? user.username : '', at: nowIso_(),
+    metal: metal === 'silver' ? 'silver' : 'gold'
   });
 }
 
+/**
+ * Melting old gold / silver into a bar, with the weight lost on the way:
+ *   net in       = old weight − loss already taken off when buying (stones, dirt)
+ *   melting loss = net in − bar weight
+ *   refining loss= weight lost later at refining / testing (typed)
+ *   fine added   = (bar − refining loss) × tested purity
+ */
 function meltCreate_(user, d) {
+  var metal = d.metal === 'silver' ? 'silver' : 'gold';
   var ids = (d.oldGoldIds || []).filter(function (x, i, a) { return a.indexOf(x) === i; });
-  req_(ids.length, 'Pick the old gold items to melt');
+  req_(ids.length, 'Pick the old items to melt');
   var barWt = round3_(pos_(d.barWt, 'Bar weight')), purity = pos_(d.purityPct, 'Purity');
   req_(barWt > 0 && purity > 0, 'Enter bar weight and tested purity');
   req_(purity <= 100, 'Purity % should be 100 or less');
+  var refineLoss = round3_(pos_(d.refineLossG, 'Refining loss'));
+  req_(refineLoss < barWt, 'Refining loss should be less than the bar weight');
   pos_(d.cost, 'Charge');
-  var totalWt = 0, ourFine = 0, paidFine = 0, paidAmount = 0;
+  var totalWt = 0, netIn = 0, ourFine = 0, paidFine = 0, paidAmount = 0;
   ids.forEach(function (gid) {
     var g = find_('OldGold', gid);
-    req_(g && g.status === 'stock', 'An item is not in old gold stock');
-    req_(g.metal !== 'silver', 'Silver cannot be melted into fine gold');
-    totalWt += num_(g.weight); ourFine += num_(g.ourFine); paidFine += num_(g.customerFine); paidAmount += num_(g.amount);
+    req_(g && g.status === 'stock', 'An item is not in old stock');
+    req_((g.metal === 'silver' ? 'silver' : 'gold') === metal, metal === 'silver' ? 'Pick only silver items' : 'Pick only gold items');
+    totalWt += num_(g.weight); netIn += num_(g.weight) - num_(g.lossG);
+    ourFine += num_(g.ourFine); paidFine += num_(g.customerFine); paidAmount += num_(g.amount);
   });
-  req_(barWt <= round3_(totalWt) + 0.0005, 'Bar weight (' + barWt + ' g) cannot be more than the old gold melted (' + round3_(totalWt) + ' g)');
-  var actualFine = round3_(barWt * purity / 100);
+  req_(barWt <= round3_(totalWt) + 0.0005, 'Bar weight (' + barWt + ' g) cannot be more than the old items melted (' + round3_(totalWt) + ' g)');
+  var actualFine = round3_((barWt - refineLoss) * purity / 100);
   var cost = round2_(d.cost);
   var date = validDate_(d.date);
   var rec = {
     id: uid_('M'), date: date, oldGoldIds: ids, totalWt: round3_(totalWt), ourFine: round3_(ourFine),
     paidFine: round3_(paidFine), paidAmount: round2_(paidAmount), barWt: barWt, purityPct: purity,
-    actualFine: actualFine, cost: cost, notes: String(d.notes || ''), by: user.username, at: nowIso_()
+    actualFine: actualFine, cost: cost, notes: String(d.notes || ''), by: user.username, at: nowIso_(),
+    metal: metal, lossG: round3_(netIn - barWt), refineLossG: refineLoss
   };
   insert_('Melts', rec);
   ids.forEach(function (gid) { update_('OldGold', gid, { status: 'melted', meltId: rec.id }); });
-  fineEntry_(user, 'melt_in', actualFine, paidAmount + cost, 'melt', rec.id, 'Melted ' + ids.length + ' items', date);
+  fineEntry_(user, 'melt_in', actualFine, paidAmount + cost, 'melt', rec.id, 'Melted ' + ids.length + ' items', date, metal);
   if (cost > 0) cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', cost, 'melting', 'melt', rec.id, 'Melting / testing charges', date);
-  audit_(user, 'melt.create', rec.id, { actualFine: actualFine });
+  audit_(user, 'melt.create', rec.id, { metal: metal, actualFine: actualFine, lossG: rec.lossG, refineLossG: refineLoss });
   return meltOut_(rec);
 }
 
 function meltOut_(m) {
-  var rate = rateOn_(m.date) || todayRate_() || { g24: 0 };
+  var rate = rateOn_(m.date) || todayRate_() || { g24: 0, silver: 0 };
+  var silver = m.metal === 'silver';
   var actual = num_(m.actualFine);
+  var bought = json_(m.oldGoldIds, []);
+  var meltLoss = num_(m.lossG), refineLoss = num_(m.refineLossG);
   return {
-    id: m.id, date: m.date, items: json_(m.oldGoldIds, []).length, totalWt: num_(m.totalWt),
+    id: m.id, date: m.date, metal: silver ? 'silver' : 'gold', items: bought.length, totalWt: num_(m.totalWt),
     ourFine: num_(m.ourFine), paidFine: num_(m.paidFine), paidAmount: num_(m.paidAmount), barWt: num_(m.barWt),
     purityPct: num_(m.purityPct), actualFine: actual, cost: num_(m.cost),
+    lossG: meltLoss, refineLossG: refineLoss, totalLossG: round3_(meltLoss + refineLoss),
+    lossPct: num_(m.totalWt) ? Math.round((meltLoss + refineLoss) / num_(m.totalWt) * 10000) / 100 : 0,
     vsEstimateG: round3_(actual - num_(m.ourFine)), vsPaidG: round3_(actual - num_(m.paidFine)),
-    gainValue: Math.round(actual * num_(rate.g24) - num_(m.paidAmount) - num_(m.cost))
+    gainValue: Math.round(actual * num_(silver ? rate.silver : rate.g24) - num_(m.paidAmount) - num_(m.cost))
   };
 }
 
-function meltList_() {
-  return rows_('Melts').slice().reverse().map(meltOut_);
+function meltList_(d) {
+  var metal = d && d.metal;
+  return rows_('Melts').filter(function (m) { return !metal || (m.metal === 'silver' ? 'silver' : 'gold') === metal; })
+    .slice().reverse().map(meltOut_);
 }
 
 function fineSummary_() {
-  var inHand = 0, valueIn = 0, gramsIn = 0;
+  var by = { gold: { inHand: 0, valueIn: 0, gramsIn: 0 }, silver: { inHand: 0, valueIn: 0, gramsIn: 0 } };
   rows_('FineLedger').forEach(function (f) {
+    var x = by[fineMetal_(f)];
     var g = num_(f.grams);
-    inHand += g;
-    if (g > 0 && num_(f.value) > 0) { gramsIn += g; valueIn += num_(f.value); }
+    x.inHand += g;
+    if (g > 0 && num_(f.value) > 0) { x.gramsIn += g; x.valueIn += num_(f.value); }
   });
   var karigarIds = {};
   rows_('Parties').forEach(function (p) { if (p.type === 'karigar') karigarIds[p.id] = 1; });
   var withKarigars = 0;
   rows_('PartyLedger').forEach(function (e) { if (karigarIds[e.partyId]) withKarigars += num_(e.goldG); });
-  var old = rows_('OldGold').filter(function (g) { return g.status === 'stock' && g.metal === 'gold'; });
-  return {
-    inHand: round3_(inHand), withKarigars: round3_(withKarigars),
-    avgCostPerG: gramsIn ? Math.round(valueIn / gramsIn) : 0,
-    oldGold: {
+  var oldOf = function (metal) {
+    var old = rows_('OldGold').filter(function (g) { return g.status === 'stock' && (g.metal === 'silver' ? 'silver' : 'gold') === metal; });
+    return {
       items: old.length,
       weight: round3_(old.reduce(function (a, g) { return a + num_(g.weight); }, 0)),
+      lossG: round3_(old.reduce(function (a, g) { return a + num_(g.lossG); }, 0)),
       ourFine: round3_(old.reduce(function (a, g) { return a + num_(g.ourFine); }, 0)),
       paidFine: round3_(old.reduce(function (a, g) { return a + num_(g.customerFine); }, 0)),
       amount: Math.round(old.reduce(function (a, g) { return a + num_(g.amount); }, 0))
-    }
+    };
+  };
+  // Weight lost: when buying (less), in melting, in refining — all time, per metal.
+  var losses = { gold: { buy: 0, melt: 0, refine: 0 }, silver: { buy: 0, melt: 0, refine: 0 } };
+  rows_('OldGold').forEach(function (g) { if (g.status !== 'void') losses[g.metal === 'silver' ? 'silver' : 'gold'].buy += num_(g.lossG); });
+  rows_('Melts').forEach(function (m) { var l = losses[m.metal === 'silver' ? 'silver' : 'gold']; l.melt += num_(m.lossG); l.refine += num_(m.refineLossG); });
+  ['gold', 'silver'].forEach(function (k) { Object.keys(losses[k]).forEach(function (x) { losses[k][x] = round3_(losses[k][x]); }); });
+  return {
+    inHand: round3_(by.gold.inHand), withKarigars: round3_(withKarigars),
+    avgCostPerG: by.gold.gramsIn ? Math.round(by.gold.valueIn / by.gold.gramsIn) : 0,
+    oldGold: oldOf('gold'),
+    silver: { inHand: round3_(by.silver.inHand), avgCostPerG: by.silver.gramsIn ? Math.round(by.silver.valueIn / by.silver.gramsIn * 100) / 100 : 0, old: oldOf('silver') },
+    losses: losses
   };
 }
 
-function fineInHand_() {
-  return round3_(rows_('FineLedger').reduce(function (a, f) { return a + num_(f.grams); }, 0));
+function fineInHand_(metal) {
+  metal = metal === 'silver' ? 'silver' : 'gold';
+  return round3_(rows_('FineLedger').reduce(function (a, f) { return a + (fineMetal_(f) === metal ? num_(f.grams) : 0); }, 0));
 }
-function needFine_(grams) {
-  var have = fineInHand_();
-  req_(grams <= have + 0.0005, 'Only ' + have + ' g fine gold in hand');
+function needFine_(grams, metal) {
+  var have = fineInHand_(metal);
+  req_(grams <= have + 0.0005, 'Only ' + have + ' g fine ' + (metal === 'silver' ? 'silver' : 'gold') + ' in hand');
 }
 
 function issueFineToKarigar_(user, karigarId, grams, refType, refId, notes, date) {
@@ -2082,11 +2196,14 @@ function issueFineToKarigar_(user, karigarId, grams, refType, refId, notes, date
 /* ---------- Wholesalers and karigars ---------- */
 
 function partyBalances_(partyId) {
-  var gold = 0, cash = 0;
+  var gold = 0, silver = 0, cash = 0;
   rows_('PartyLedger').forEach(function (e) {
-    if (e.partyId === partyId) { gold += num_(e.goldG); cash += num_(e.cash); }
+    if (e.partyId === partyId) { gold += num_(e.goldG); silver += num_(e.silverG); cash += num_(e.cash); }
   });
-  return { goldG: round3_(gold), cash: round2_(cash) };
+  return { goldG: round3_(gold), silverG: round3_(silver), cash: round2_(cash) };
+}
+function partyValue_(b, rate) {
+  return Math.round(b.goldG * (rate ? num_(rate.g24) : 0) + b.silverG * (rate ? num_(rate.silver) : 0) + b.cash);
 }
 
 function partiesList_(d) {
@@ -2095,8 +2212,8 @@ function partiesList_(d) {
     return (!d.type || p.type === d.type) && p.active !== 'false';
   }).map(function (p) {
     var b = partyBalances_(p.id);
-    return { id: p.id, type: p.type, name: p.name, mobile: p.mobile, notes: p.notes, goldG: b.goldG, cash: b.cash,
-      valueToday: Math.round(b.goldG * (rate ? rate.g24 : 0) + b.cash) };
+    return { id: p.id, type: p.type, name: p.name, mobile: p.mobile, notes: p.notes, goldG: b.goldG, silverG: b.silverG, cash: b.cash,
+      valueToday: partyValue_(b, rate) };
   });
 }
 
@@ -2120,20 +2237,21 @@ function partyLedger_(id) {
   var p = find_('Parties', id);
   req_(p, 'Not found');
   var entries = rows_('PartyLedger').filter(function (e) { return e.partyId === id; }).map(function (e) {
-    return { id: e.id, date: e.date, type: e.type, goldG: num_(e.goldG), cash: num_(e.cash), rate: num_(e.rate),
+    return { id: e.id, date: e.date, type: e.type, goldG: num_(e.goldG), silverG: num_(e.silverG), cash: num_(e.cash), rate: num_(e.rate),
       refType: e.refType, refId: e.refId, notes: e.notes, by: e.by };
   }).reverse();
   var b = partyBalances_(id);
   var rate = todayRate_();
-  return { party: p, entries: entries, goldG: b.goldG, cash: b.cash,
-    valueToday: Math.round(b.goldG * (rate ? rate.g24 : 0) + b.cash) };
+  return { party: p, entries: entries, goldG: b.goldG, silverG: b.silverG, cash: b.cash,
+    valueToday: partyValue_(b, rate) };
 }
 
 /**
  * Wholesaler (positive = we owe them):
- *   purchase      goods taken: goldG = fine to give, cash = labour to give; items optional (added to stock)
+ *   purchase      goods taken: goldG / silverG = fine to give (weight × touch %), cash = labour; items optional (to stock)
  *   pay_gold      gave fine gold from our fine stock (goldG grams)
- *   pay_cash_rate "rate cut": settled goldG grams in cash at rate
+ *   pay_silver    gave fine silver from our fine silver stock (silverG grams)
+ *   pay_cash_rate "rate cut": settled grams (gold, or silver when metal = silver) in cash at rate ₹/g
  *   pay_cash      paid cash dues (labour etc.)
  * Karigar (goldG positive = karigar holds our gold, cash positive = we owe labour):
  *   issue_gold, return_gold, job_done (fineUsed, labour), pay_labour
@@ -2144,12 +2262,13 @@ function partyEntry_(user, d) {
   var date = validDate_(d.date);
   var g = round3_(pos_(d.goldG, 'Grams')), c = round2_(pos_(d.cash, 'Amount')), rate = pos_(d.rate, 'Rate');
   var mode = d.mode === 'upi' ? 'upi' : 'cash';
-  var e = { id: uid_('Y'), partyId: p.id, date: date, type: d.type, goldG: 0, cash: 0, rate: '',
+  var sg = round3_(pos_(d.silverG, 'Silver grams'));
+  var e = { id: uid_('Y'), partyId: p.id, date: date, type: d.type, goldG: 0, silverG: 0, cash: 0, rate: '',
     refType: d.refType || '', refId: d.refId || '', notes: String(d.notes || ''), by: user.username, at: nowIso_() };
   if (p.type === 'wholesaler') {
     if (d.type === 'purchase') {
-      req_(g > 0 || c > 0, 'Enter fine gold to give or cash to give');
-      e.goldG = g; e.cash = c;
+      req_(g > 0 || sg > 0 || c > 0, 'Enter the fine to give or the cash to give');
+      e.goldG = g; e.silverG = sg; e.cash = c;
       if (d.items && d.items.length) {
         var added = stockAdd_(user, { items: d.items, source: 'wholesaler', sourceId: e.id });
         e.notes = (e.notes ? e.notes + ' · ' : '') + added.length + ' items to stock';
@@ -2159,10 +2278,17 @@ function partyEntry_(user, d) {
       needFine_(g);
       e.goldG = -g;
       fineEntry_(user, 'wholesaler_out', -g, 0, 'party', p.id, 'To ' + p.name, date);
+    } else if (d.type === 'pay_silver') {
+      req_(sg > 0, 'Enter grams given');
+      needFine_(sg, 'silver');
+      e.silverG = -sg;
+      fineEntry_(user, 'wholesaler_out', -sg, 0, 'party', p.id, 'To ' + p.name, date, 'silver');
     } else if (d.type === 'pay_cash_rate') {
       req_(g > 0 && rate > 0, 'Enter grams and rate');
-      e.goldG = -g; e.rate = rate;
-      cash_(user, 'out', mode, Math.round(g * rate), 'wholesaler', 'party', p.id, p.name + ' rate cut ' + g + ' g', date);
+      var isAg = d.metal === 'silver';
+      if (isAg) e.silverG = -g; else e.goldG = -g;
+      e.rate = rate;
+      cash_(user, 'out', mode, Math.round(g * rate), 'wholesaler', 'party', p.id, p.name + ' rate cut ' + g + ' g' + (isAg ? ' silver' : ''), date);
     } else if (d.type === 'pay_cash') {
       req_(c > 0, 'Enter the amount');
       e.cash = -c;
@@ -2189,7 +2315,7 @@ function partyEntry_(user, d) {
     } else throw new Error('Unknown entry type');
   }
   insert_('PartyLedger', e);
-  audit_(user, 'party.' + d.type, p.id, { goldG: e.goldG, cash: e.cash });
+  audit_(user, 'party.' + d.type, p.id, { goldG: e.goldG, silverG: e.silverG, cash: e.cash });
   var led = partyLedger_(p.id);
   if (led.entries && led.entries.length > 60) led.entries = led.entries.slice(0, 60); // keep the reply small
   return led;
@@ -2283,7 +2409,7 @@ function reportDaily_(date) {
   }, 0);
   var melts = rows_('Melts').filter(function (m) { return m.date === date; });
   var meltGain = melts.reduce(function (a, m) {
-    return a + num_(m.actualFine) * num_(rate.g24) - num_(m.paidAmount) - num_(m.cost);
+    return a + num_(m.actualFine) * num_(m.metal === 'silver' ? rate.silver : rate.g24) - num_(m.paidAmount) - num_(m.cost);
   }, 0);
   var cashEntries = rows_('Cash').filter(function (c) { return c.date === date; });
   var expenses = cashEntries.filter(function (c) { return c.dir === 'out' && c.category === 'expense'; })
@@ -2695,10 +2821,10 @@ function exportList_(user, d) {
     };
   } else if (m === 'oldgold') {
     out = {
-      title: 'Old gold', columns: ['Date', 'Customer', 'Item', 'Metal', 'Weight (g)', 'Cut %', 'Customer fine (g)', 'Rate', 'Amount',
+      title: 'Old gold', columns: ['Date', 'Customer', 'Item', 'Metal', 'Weight (g)', 'Less / loss (g)', 'Cut %', 'Customer fine (g)', 'Rate', 'Amount',
         'From', 'Status'].concat(owner ? ['Our purity %', 'Our fine (g)'] : []),
       rows: rows_('OldGold').filter(function (g) { return inRange(g.date) && g.status !== 'void'; }).map(function (g) {
-        return [g.date, g.customerName, g.item, g.metal, num_(g.weight), num_(g.cutPct), num_(g.customerFine), num_(g.rate), num_(g.amount),
+        return [g.date, g.customerName, g.item, g.metal, num_(g.weight), num_(g.lossG), num_(g.cutPct), num_(g.customerFine), num_(g.rate), num_(g.amount),
           g.source === 'sale' ? 'In a bill' : 'Bought', g.status].concat(owner ? [num_(g.ourPurityPct), num_(g.ourFine)] : []);
       })
     };

@@ -4,6 +4,7 @@ import { isOwner, isViewer } from '../state.js';
 import { h, screen, card, busy, toast, inr, fdate, empty, go, ask, field, todayStr } from '../ui.js';
 import { t } from '../i18n.js';
 import { exportCsvButton } from './exports.js';
+import { sendBakiReminder } from '../baki.js';
 
 const FROM = { sale: 'Bill', order: 'Order', repair: 'Repair', loan: 'Girvi', payment: 'Paid', adjust: 'Adjusted', 'sale-cancel': 'Bill cancelled' };
 
@@ -27,13 +28,15 @@ export async function render(params, query) {
       h('div', { class: 'row-actions' },
         isViewer() ? null : h('button', { class: 'btn small', onclick: () => pay(r) }, t('Payment received')),
         h('a', { class: 'btn2 small', href: '#/customer/' + r.customerId }, t('Open customer')),
+        r.mobile ? h('button', { class: 'btn2 small wa', onclick: () => sendBakiReminder(r) }, '💬 ' + t('WhatsApp reminder')) : null,
         r.mobile ? h('a', { class: 'btn2 small', href: 'tel:' + r.mobile }, t('Call')) : null,
         isOwner() ? h('button', { class: 'btn2 small', onclick: () => adjust(r) }, t('Write off / correct')) : null));
     return h('div', { class: 'card' },
       h('div', { class: 'due-row', style: { border: 0, padding: 0 }, onclick: () => open.classList.toggle('hidden') },
         h('div', { class: 'who' }, h('b', null, r.customerName), h('span', { class: 'hint' },
           [r.mobile, r.village, t('since') + ' ' + fdate(r.since)].filter(Boolean).join(' · '))),
-        h('div', { class: 'amt' }, inr(r.due))),
+        h('div', { class: 'amt' }, inr(r.due)),
+        r.mobile ? h('button', { class: 'wa-mini', 'aria-label': 'WhatsApp', onclick: (ev) => { ev.stopPropagation(); sendBakiReminder(r); } }, '💬') : null),
       open);
   });
 

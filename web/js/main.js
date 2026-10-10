@@ -15,6 +15,7 @@ const ROUTES = [
   ['search', () => import('./screens/customers.js'), 'search'],
   ['customer/:id', () => import('./screens/customers.js'), 'profile'],
   ['customer-edit/:id', () => import('./screens/customers.js'), 'edit'],
+  ['customers-import', () => import('./screens/importcust.js'), 'render'],
   ['sale', () => import('./screens/sale.js'), 'render'],
   ['bill/:id', () => import('./screens/billview.js'), 'render'],
   ['bills', () => import('./screens/billview.js'), 'list'],
@@ -155,7 +156,7 @@ window.addEventListener('unhandledrejection', (ev) => {
 const ACTIVE = {
   'bill/:id': 'bills', 'bills-export': 'bills', 'loan-new': 'loans', 'loan/:id': 'loans', 'order-new': 'orders', 'order/:id': 'orders',
   'repair-new': 'repairs', 'repair/:id': 'repairs', 'stock-add': 'stock', 'rate': 'home', 'search': 'home',
-  'customer/:id': 'home', 'customer-edit/:id': 'home', 'help/:topic': 'help', 'bill-design': 'settings'
+  'customer/:id': 'home', 'customer-edit/:id': 'home', 'customers-import': 'home', 'help/:topic': 'help', 'bill-design': 'settings'
 };
 let currentParams = {};
 

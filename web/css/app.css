@@ -317,3 +317,11 @@ input[type=color] { width: 100%; height: 44px; border: 1px solid #D5DCE3; border
 .design-bar .btn2 { min-height: 44px; padding: 0; }
 .design-prev.big { max-height: 60vh; }
 .card.live-btn { flex-direction: row; align-items: center; text-align: left; }
+.wa-mini { width: 44px; height: 44px; border-radius: 50%; border: 1px solid #b7e4c7; background: #e8f8ee; font-size: 20px; flex: none; }
+.btn2.wa { border-color: #25D366; color: #0f6b34; }
+.row-card.with-photo { display: flex; flex-direction: row; gap: 10px; align-items: center; }
+.row-card.with-photo > .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.photo-btn { width: 48px; height: 48px; flex: none; border-radius: 10px; border: 1px dashed var(--line-2); background: var(--bg); font-size: 20px; }
+.photo-btn.has { border-style: solid; background: #fff7e6; }
+.photo-box { min-height: 160px; display: flex; align-items: center; justify-content: center; }
+.photo-big { max-width: 100%; max-height: 60vh; border-radius: 10px; }

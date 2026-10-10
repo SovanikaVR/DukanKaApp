@@ -4,6 +4,7 @@ import { list as settingList, purityFor, isViewer, isOwner } from '../state.js';
 import { h, screen, field, card, grid, seg, busy, toast, inr, g3, go, empty, chips, num, ask, remember } from '../ui.js';
 import { t } from '../i18n.js';
 import { exportCsvButton } from './exports.js';
+import { takePhoto, showPhoto } from '../photos.js';
 
 export async function render(params, query) {
   const metal = query.m || 'gold';
@@ -29,6 +30,11 @@ export async function render(params, query) {
     if (!v) return;
     await busy(null, async () => { await call('stock.update', Object.assign({ id: i.id }, v)); toast('Saved'); go('stock?m=' + metal + '&c=' + encodeURIComponent(cat)); });
   };
+  const again = () => go('stock?m=' + metal + '&c=' + encodeURIComponent(cat), { replace: true });
+  // Photo: a small camera button; the picture itself is loaded only when tapped.
+  const photoBtn = (i) => (i.photoId
+    ? h('button', { class: 'photo-btn has', 'aria-label': t('See photo'), onclick: () => showPhoto(i, !isViewer(), again) }, '🖼️')
+    : isViewer() ? null : h('button', { class: 'photo-btn', 'aria-label': t('Add photo'), onclick: async () => { if (await takePhoto(i)) again(); } }, '📷'));
   return screen(t('Stock'), 'Today: ' + sum.soldToday + ' sold', [
     h('div', { class: 'stat-row' },
       h('div', { class: 'stat' }, h('span', null, metal === 'gold' ? 'Gold in shop' : 'Silver in shop'), h('b', null, tot.pieces + ' pcs · ' + g3(tot.netWt) + ' g')),
@@ -40,12 +46,12 @@ export async function render(params, query) {
       cats.map((c) => h('a', { class: 'trow' + (c.category === cat ? ' on' : ''), href: '#/stock?m=' + metal + (c.category === cat ? '' : '&c=' + encodeURIComponent(c.category)) },
         h('b', null, c.category), h('span', null, c.pieces), h('span', { class: 'r' }, g3(c.netWt) + ' g')))) : empty('No ' + metal + ' items in stock'),
     h('div', { class: 'sec' }, (cat || 'ALL') + ' · ITEMS'),
-    items.length ? items.map((i) => h('div', { class: 'row-card' },
+    items.length ? items.map((i) => h('div', { class: 'row-card with-photo' }, photoBtn(i), h('div', { class: 'grow' },
       h('div', { class: 'kv' }, h('b', null, (i.tag ? i.tag + ' · ' : '') + i.name), h('b', null, g3(i.netWt) + ' g')),
       h('div', { class: 'kv muted' }, h('span', null, i.category + (i.purityPct ? ' · ' + i.purityPct + '%' : '') + (i.pieces > 1 ? ' · ' + i.pieces + ' pcs' : '')),
         h('span', { class: 'row-actions' },
           isOwner() ? h('button', { class: 'link', onclick: () => edit(i) }, t('Edit')) : null,
-          isOwner() ? h('button', { class: 'link', onclick: () => remove(i) }, 'Remove') : null)))) : empty('Nothing here'),
+          isOwner() ? h('button', { class: 'link', onclick: () => remove(i) }, 'Remove') : null))))) : empty('Nothing here'),
     h('div', { class: 'hint' }, t('Selling from stock: in New Sale tap "From stock". Then the item leaves stock by itself (for a lot, only the weight / pieces sold). Items typed by hand in a bill do not change stock.'))
   ], isViewer() ? null : h('a', { class: 'btn', href: '#/stock-add?m=' + metal }, '+ Add stock'), { right: exportCsvButton('stock', () => ({ status: 'in' })) });
 }

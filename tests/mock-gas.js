@@ -105,8 +105,21 @@ function createContext(now) {
       base64EncodeWebSafe: (bytes) => Buffer.from(bytes.map((b) => (b < 0 ? b + 256 : b))).toString('base64url'),
       Charset: { UTF_8: 'utf8' },
       computeDigest: (alg, str) => Array.from(crypto.createHash('sha256').update(str, 'utf8').digest()).map((b) => (b > 127 ? b - 256 : b)),
-      formatDate: fmt
+      formatDate: fmt,
+      base64Decode: (b) => Array.from(Buffer.from(b, 'base64')),
+      base64Encode: (bytes) => Buffer.from(bytes.map((b) => (b < 0 ? b + 256 : b))).toString('base64'),
+      newBlob: (bytes, type, name) => ({ bytes, type, name, getBytes: () => bytes })
     },
+    // Google Drive kept in memory (stock photos).
+    DriveApp: (() => {
+      const files = {}; let n = 0;
+      const folder = (id) => ({ getId: () => id, createFile: (blob) => { const fid = 'file' + (++n); files[fid] = { blob, trashed: false }; return { getId: () => fid }; } });
+      return {
+        createFolder: () => folder('folder1'), getFolderById: (id) => folder(id),
+        getFileById: (id) => { const f = files[id]; if (!f) throw new Error('no file'); return { getBlob: () => f.blob, setTrashed: (v) => { f.trashed = v; } }; },
+        _files: files
+      };
+    })(),
     // Live-rate services answered with fixed sample numbers (no internet in tests).
     UrlFetchApp: { fetch: (url) => {
       const body = /XAU/.test(url) ? { price: 4183.4, updatedAt: '2026-10-09T11:45:20Z' } : /XAG/.test(url) ? { price: 60.28, updatedAt: '2026-10-09T11:06:19Z' }

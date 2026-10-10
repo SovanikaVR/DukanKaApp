@@ -231,6 +231,8 @@ export function oldEditor(onchange, onremove) {
   let metal = 'gold';
   const item = field('Old item', { value: '' });
   const weight = field(t('Weight (g)'), { type: 'num', oninput: onchange });
+  // Less: stones, dirt or the expected melting loss — taken off before the fine is worked out.
+  const loss = field(t('Less / loss (g)'), { type: 'num', value: '', oninput: onchange });
   const cut = field(t('Customer cut %') + ' ' + t('(on bill)'), { max: 100, type: 'num', value: setting('standard_cut_pct', '20'), oninput: onchange });
   const rate = field('24K rate ₹/g', { type: 'num', value: rateFor('24K'), oninput: onchange });
   const pur = field(t('Our purity estimate %'), { max: 100, type: 'num', value: setting('standard_purity_pct', '80'), oninput: onchange });
@@ -242,11 +244,11 @@ export function oldEditor(onchange, onremove) {
   const ourLine = h('div', { class: 'shop-only-calc' });
   const el = h('div', { class: 'card gold-card' },
     h('div', { class: 'line-top' }, item, h('button', { type: 'button', class: 'x', 'aria-label': 'Remove old item', onclick: onremove }, '×')),
-    mseg, grid(2, weight, cut), rate, custLine,
+    mseg, grid(3, weight, loss, cut), rate, custLine,
     h('div', { class: 'shop-only' }, h('div', { class: 'shop-only-title' }, icon('lock', 14), ' SHOP ONLY · not printed on bill'),
       h('div', { class: 'grid g2' }, pur, ourLine)));
   const calc = () => {
-    const w = num(weight.input.value);
+    const w = Math.max(0, num(weight.input.value) - num(loss.input.value));
     let cf = 0, of = 0;
     try { cf = Calc.evalFormula(setting('formula_old_fine'), { Weight: w, Cut: num(cut.input.value) }); } catch (e) { /* ignore */ }
     try { of = Calc.evalFormula(setting('formula_our_fine'), { Weight: w, Purity: num(pur.input.value) }); } catch (e) { /* ignore */ }
@@ -254,17 +256,18 @@ export function oldEditor(onchange, onremove) {
   };
   const draw = () => {
     const c = calc();
-    custLine.replaceChildren(h('span', null, t('Customer gets for') + ' ' + g3(c.cf) + ' g ' + t('fine')), h('span', null, '− ' + inr(Math.round(c.amt))));
+    const ls = num(loss.input.value);
+    custLine.replaceChildren(h('span', null, (ls ? t('Net') + ' ' + g3(Math.max(0, num(weight.input.value) - ls)) + ' g · ' : '') + t('Customer gets for') + ' ' + g3(c.cf) + ' g ' + t('fine')), h('span', null, '− ' + inr(Math.round(c.amt))));
     const m = c.of - c.cf;
     ourLine.replaceChildren(h('div', null, 'Our fine: ', h('b', null, g3(c.of) + ' g')),
       h('div', { class: m >= 0 ? 'good' : 'bad' }, 'Margin: ' + (m >= 0 ? '+' : '') + g3(m) + ' g · ' + inr(m * num(rate.input.value))));
   };
-  [weight, cut, rate, pur].forEach((f) => f.input.addEventListener('input', draw));
+  [weight, loss, cut, rate, pur].forEach((f) => f.input.addEventListener('input', draw));
   draw();
   return {
     el,
     amount: () => Math.round(calc().amt),
-    get: () => ({ item: item.input.value.trim() || 'Old item', metal, weight: weight.input.value, cutPct: cut.input.value,
+    get: () => ({ item: item.input.value.trim() || 'Old item', metal, weight: weight.input.value, lossG: loss.input.value, cutPct: cut.input.value,
       rate: rate.input.value, ourPurityPct: pur.input.value })
   };
 }

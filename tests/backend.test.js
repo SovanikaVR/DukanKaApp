@@ -154,6 +154,73 @@ test('melt old gold into fine stock, pay wholesaler in gold, karigar issue', () 
   assert.strictEqual(ok('stock.summary', {}, T).totals.gold.pieces, 1);
 });
 
+test('weight loss: old gold less, melting + refining loss, silver melt', () => {
+  const c = ok('customers.search', { q: '' }, T).results[0];
+  // 10 g old gold, 0.5 g stones/dirt taken off → fine on 9.5 g
+  const r = ok('oldgold.buy', { customerId: c.id, items: [{ item: 'Old chain', weight: 10, lossG: 0.5, cutPct: 20, rate: 15000, ourPurityPct: 80 }] }, T);
+  assert.strictEqual(r.items[0].customerFine, 7.6);
+  assert.strictEqual(r.items[0].lossG, 0.5);
+  assert.ok(/less than the weight/.test(call('oldgold.buy', { customerId: c.id, items: [{ weight: 2, lossG: 3, cutPct: 10, rate: 15000 }] }, T).error));
+  ok('oldgold.buy', { customerId: c.id, items: [{ item: 'Old payal', metal: 'silver', weight: 100, lossG: 2, cutPct: 10, rate: 190, ourPurityPct: 70 }] }, T);
+  const gold = ok('oldgold.list', {}, T).filter((g) => g.metal === 'gold');
+  const silver = ok('oldgold.list', {}, T).filter((g) => g.metal === 'silver');
+  assert.ok(/only gold/.test(call('melt.create', { oldGoldIds: [gold[0].id, silver[0].id], barWt: 5, purityPct: 80 }, T).error));
+  // gold: net in 9.5 g, bar 9.3 g → melting loss 0.2 g; refining loss 0.1 g → fine (9.3−0.1)×80% = 7.36
+  const m = ok('melt.create', { oldGoldIds: [gold[0].id], barWt: 9.3, purityPct: 80, refineLossG: 0.1 }, T);
+  assert.strictEqual(m.lossG, 0.2);
+  assert.strictEqual(m.refineLossG, 0.1);
+  assert.strictEqual(m.totalLossG, 0.3);
+  assert.strictEqual(m.actualFine, 7.36);
+  const ms = ok('melt.create', { metal: 'silver', oldGoldIds: [silver[0].id], barWt: 96, purityPct: 75 }, T);
+  assert.strictEqual(ms.metal, 'silver');
+  assert.strictEqual(ms.lossG, 2);
+  assert.strictEqual(ms.actualFine, 72);
+  const f = ok('fine.summary', {}, T);
+  assert.strictEqual(f.silver.inHand, 72);
+  assert.strictEqual(f.losses.gold.buy, 0.5);
+  assert.strictEqual(f.losses.gold.melt, 0.3); // 0.1 g from the first melt + 0.2 g here
+  assert.strictEqual(f.losses.silver.melt, 2);
+  assert.strictEqual(ok('melt.list', { metal: 'silver' }, T).length, 1);
+});
+
+test('wholesaler: silver purchase, pay in fine silver, silver rate cut', () => {
+  const w = ok('parties.save', { type: 'wholesaler', name: 'Silver Mart' }, T);
+  // 1 kg payal at 70% touch → 700 g fine silver to give
+  ok('parties.entry', { partyId: w.id, type: 'purchase', silverG: 700, cash: 0 }, T);
+  assert.ok(/fine silver in hand/.test(call('parties.entry', { partyId: w.id, type: 'pay_silver', silverG: 100 }, T).error));
+  ok('parties.entry', { partyId: w.id, type: 'pay_silver', silverG: 72 }, T);
+  const led = ok('parties.entry', { partyId: w.id, type: 'pay_cash_rate', metal: 'silver', goldG: 128, rate: 190 }, T);
+  assert.strictEqual(led.silverG, 500);
+  assert.strictEqual(led.goldG, 0);
+  assert.strictEqual(ok('fine.summary', {}, T).silver.inHand, 0);
+  assert.strictEqual(ok('parties.list', { type: 'wholesaler' }, T).find((p) => p.id === w.id).silverG, 500);
+});
+
+test('stock photo kept in Drive, loaded on its own', () => {
+  const it = ok('stock.list', {}, T)[0];
+  const jpg = 'data:image/jpeg;base64,' + Buffer.from('fakejpeg').toString('base64');
+  assert.ok(ok('stock.photoSet', { id: it.id, data: jpg }, T).photoId);
+  assert.strictEqual(ok('stock.photo', { id: it.id }, T).data, jpg);
+  assert.ok(ok('stock.list', {}, T)[0].photoId);
+  ok('stock.photoSet', { id: it.id, data: '' }, T);
+  assert.ok(/No photo/.test(call('stock.photo', { id: it.id }, T).error));
+});
+
+test('import many customers with opening baki', () => {
+  const before = ok('dues.list', {}, T).total;
+  const r = ok('customers.import', { rows: [
+    { firstName: 'Suresh', lastName: 'Jadhav', mobile: '+91 98220 11111', village: 'Akot', baki: '₹2,500' },
+    { firstName: 'Mangesh', mobile: '98220 22222' },
+    { firstName: 'Suresh', mobile: '9822011111' },
+    { firstName: 'Bad', mobile: '12345' },
+    { lastName: '', firstName: '' }] }, T);
+  assert.strictEqual(r.added, 2);
+  assert.strictEqual(r.skipped.length, 3);
+  assert.strictEqual(r.baki, 2500);
+  assert.strictEqual(ok('dues.list', {}, T).total, before + 2500);
+  assert.strictEqual(ok('customers.import', { rows: [{ firstName: 'Suresh', mobile: '9822011111' }] }, T).added, 0);
+});
+
 test('reports', () => {
   const d = ok('reports.daily', { date: '2026-10-08' }, T);
   assert.strictEqual(d.sales.count, 2);

@@ -25,10 +25,10 @@ export async function render(params, query) {
     toast('Saved · ' + inr(r.total) + ' paid');
     const content = h('div', { class: 'stack' }, h('div', { class: 'card' },
       h('div', { class: 'kv strong' }, h('span', null, r.customer.name), h('span', null, inr(r.total))),
-      ...r.items.map((g) => h('div', { class: 'kv' }, h('span', null, g.item + ' ' + g3(g.weight) + ' g, cut ' + g.cutPct + '%'), h('span', null, inr(g.amount))))),
+      ...r.items.map((g) => h('div', { class: 'kv' }, h('span', null, g.item + ' ' + g3(g.weight) + ' g' + (g.lossG ? ' − ' + g3(g.lossG) + ' g' : '') + ', cut ' + g.cutPct + '%'), h('span', null, inr(g.amount))))),
     docActions((size) => receiptHtml({
       title: 'OLD GOLD PURCHASE', no: '', date: r.date, shop: r.shop, customer: r.customer,
-      rows: r.items.map((g) => [g.item + ' ' + g3(g.weight) + 'g, cut ' + g.cutPct + '% = ' + g3(g.customerFine) + 'g fine', '₹' + Calc.inr(g.amount)]),
+      rows: r.items.map((g) => [g.item + ' ' + g3(g.weight) + 'g' + (g.lossG ? ' − ' + g3(g.lossG) + 'g' : '') + ', cut ' + g.cutPct + '% = ' + g3(g.customerFine) + 'g fine', '₹' + Calc.inr(g.amount)]),
       total: ['Paid', '₹' + Calc.inr(r.total)]
     }, size), { filename: 'old-gold-' + r.date + '.pdf', mobile: r.customer.mobile,
       text: `${r.shop.name}\nOld gold bought on ${fdate(r.date)}\n` + r.items.map((g) => `${g.item} ${g3(g.weight)} g → ₹${Calc.inr(g.amount)}`).join('\n') + `\nPaid: ₹${Calc.inr(r.total)}` }));

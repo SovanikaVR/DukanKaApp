@@ -188,7 +188,7 @@ function invoicePaper(b, paper) {
   if (gst) sums.push([t.taxable, m2(b.subtotal)], ['CGST @ ' + b.gstPct / 2 + '%', m2(half)], ['SGST @ ' + b.gstPct / 2 + '%', m2(b.tax - half)]);
   if (b.roundOff) sums.push([t.round, m2(b.roundOff)]);
   sums.push([t.total, m2(b.invoiceTotal), 'strong']);
-  if (f.oldGold) b.oldGold.forEach((g) => sums.push([`${t.lessOld} ${esc(g.item)} — ${g3(g.weight)} g, ${t.cut} ${esc(g.cutPct)}%, ${t.fine} ${g3(g.customerFine)} g × ${m0(g.rate)}`, '−' + m2(g.amount)]));
+  if (f.oldGold) b.oldGold.forEach((g) => sums.push([`${t.lessOld} ${esc(g.item)} — ${g3(g.weight)} g${+g.lossG ? ' − ' + g3(g.lossG) + ' g' : ''}, ${t.cut} ${esc(g.cutPct)}%, ${t.fine} ${g3(g.customerFine)} g × ${m0(g.rate)}`, '−' + m2(g.amount)]));
   else if (b.oldValue) sums.push([t.lessOld, '−' + m2(b.oldValue)]);
   if (b.oldValue) sums.push([b.net >= 0 ? t.netPay : t.paidToCust, '₹' + m2(Math.abs(b.net)), 'strong']);
   const sumRow = ([label, val, cls]) => `<tr class="${cls || ''}"><td colspan="${span}" class="n lbl">${label}</td><td class="n">${val}</td></tr>`;
@@ -253,7 +253,7 @@ function invoiceThermal(b, mm) {
   <div class="hr"></div>
   ${gst ? r(t.taxable, m2(b.subtotal)) + r('CGST ' + b.gstPct / 2 + '%', m2(half)) + r('SGST ' + b.gstPct / 2 + '%', m2(b.tax - half)) : ''}
   ${b.roundOff ? r(t.round, m2(b.roundOff)) : ''}${r(t.total, m2(b.invoiceTotal), 'b')}
-  ${b.oldGold.length ? b.oldGold.map((g) => (f.oldGold ? `<div>${t.lessOld} ${esc(g.item)} ${g3(g.weight)}g, ${t.cut} ${esc(g.cutPct)}%</div>` : '') + r(f.oldGold ? t.fine + ' ' + g3(g.customerFine) + 'g × ' + m0(g.rate) : t.lessOld, '-' + m2(g.amount))).join('') : ''}
+  ${b.oldGold.length ? b.oldGold.map((g) => (f.oldGold ? `<div>${t.lessOld} ${esc(g.item)} ${g3(g.weight)}g${+g.lossG ? ' −' + g3(g.lossG) + 'g' : ''}, ${t.cut} ${esc(g.cutPct)}%</div>` : '') + r(f.oldGold ? t.fine + ' ' + g3(g.customerFine) + 'g × ' + m0(g.rate) : t.lessOld, '-' + m2(g.amount))).join('') : ''}
   ${b.oldValue ? '<div class="hr"></div>' + r(b.net >= 0 ? t.netPay : t.paidToCust, m0(Math.abs(b.net)), 'b big') : ''}
   ${f.payment ? (b.cash ? r(t.cash, m0(b.cash)) : '') + (b.upi ? r(t.upi, m0(b.upi)) : '') + (b.udhaar ? r(t.baki, m0(b.udhaar)) : '') : ''}
   ${b.notes ? `<div class="hr"></div><div>${t.note}: ${esc(b.notes)}</div>` : ''}

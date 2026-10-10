@@ -2,18 +2,22 @@
 
 function oldGoldCalc_(g) {
   var weight = pos_(g.weight, 'Old gold weight');
+  // Less: stones, dirt, expected melting loss — taken off before the fine is worked out.
+  var loss = round3_(pos_(g.lossG, 'Weight loss'));
+  req_(loss < weight || !weight, 'Weight loss should be less than the weight');
+  var net = round3_(weight - loss);
   var cut = pos_(g.cutPct, 'Cut %');
   var rate = pos_(g.rate, 'Rate');
   var purity = g.ourPurityPct === '' || g.ourPurityPct === undefined ? num_(settings_().standard_purity_pct) : pos_(g.ourPurityPct, 'Purity');
   req_(cut <= 100, 'Cut % should be between 0 and 100');
   req_(purity <= 100, 'Purity % should be between 0 and 100');
   pos_(g.amount, 'Old gold amount');
-  var customerFine = round3_(Calc.evalFormula(formula_('formula_old_fine'), { Weight: weight, Cut: cut }));
-  var ourFine = round3_(Calc.evalFormula(formula_('formula_our_fine'), { Weight: weight, Purity: purity }));
+  var customerFine = round3_(Calc.evalFormula(formula_('formula_old_fine'), { Weight: net, Cut: cut }));
+  var ourFine = round3_(Calc.evalFormula(formula_('formula_our_fine'), { Weight: net, Purity: purity }));
   var amount = g.amount !== undefined && g.amount !== '' ? Math.round(num_(g.amount)) : Math.round(customerFine * rate);
   return {
     item: String(g.item || 'Old item').trim(), metal: g.metal === 'silver' ? 'silver' : 'gold',
-    weight: round3_(weight), cutPct: cut, customerFine: customerFine, rate: rate, amount: amount,
+    weight: round3_(weight), lossG: loss, cutPct: cut, customerFine: customerFine, rate: rate, amount: amount,
     ourPurityPct: purity, ourFine: ourFine
   };
 }
@@ -168,7 +172,7 @@ function saleCreate_(user, d) {
       id: uid_('G'), date: date, customerId: c.id, customerName: customerName_(c), source: 'sale', billId: id,
       item: g.item, metal: g.metal, weight: g.weight, cutPct: g.cutPct, customerFine: g.customerFine,
       rate: g.rate, amount: g.amount, ourPurityPct: g.ourPurityPct, ourFine: g.ourFine, status: 'stock',
-      meltId: '', by: user.username, at: nowIso_()
+      meltId: '', by: user.username, at: nowIso_(), lossG: g.lossG || 0
     });
   });
   var dir = net >= 0 ? 'in' : 'out';
@@ -293,7 +297,7 @@ function oldGoldBuy_(user, d) {
       id: id, date: date, customerId: c.id, customerName: customerName_(c), source: 'purchase', billId: '',
       item: g.item, metal: g.metal, weight: g.weight, cutPct: g.cutPct, customerFine: g.customerFine,
       rate: g.rate, amount: g.amount, ourPurityPct: g.ourPurityPct, ourFine: g.ourFine, status: 'stock',
-      meltId: '', by: user.username, at: nowIso_()
+      meltId: '', by: user.username, at: nowIso_(), lossG: g.lossG || 0
     });
   });
   cash_(user, 'out', d.mode === 'upi' ? 'upi' : 'cash', total, 'old-gold', 'oldgold', ids[0], customerName_(c), date);
@@ -315,7 +319,7 @@ function oldGoldList_(d) {
     .slice().reverse().map(function (g) {
       return {
         id: g.id, date: g.date, customerName: g.customerName, item: g.item, metal: g.metal,
-        weight: num_(g.weight), cutPct: num_(g.cutPct), customerFine: num_(g.customerFine), amount: num_(g.amount),
+        weight: num_(g.weight), lossG: num_(g.lossG), cutPct: num_(g.cutPct), customerFine: num_(g.customerFine), amount: num_(g.amount),
         ourPurityPct: num_(g.ourPurityPct), ourFine: num_(g.ourFine), status: g.status, source: g.source
       };
     });

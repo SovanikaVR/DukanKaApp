@@ -37,10 +37,10 @@ function exportList_(user, d) {
     };
   } else if (m === 'oldgold') {
     out = {
-      title: 'Old gold', columns: ['Date', 'Customer', 'Item', 'Metal', 'Weight (g)', 'Cut %', 'Customer fine (g)', 'Rate', 'Amount',
+      title: 'Old gold', columns: ['Date', 'Customer', 'Item', 'Metal', 'Weight (g)', 'Less / loss (g)', 'Cut %', 'Customer fine (g)', 'Rate', 'Amount',
         'From', 'Status'].concat(owner ? ['Our purity %', 'Our fine (g)'] : []),
       rows: rows_('OldGold').filter(function (g) { return inRange(g.date) && g.status !== 'void'; }).map(function (g) {
-        return [g.date, g.customerName, g.item, g.metal, num_(g.weight), num_(g.cutPct), num_(g.customerFine), num_(g.rate), num_(g.amount),
+        return [g.date, g.customerName, g.item, g.metal, num_(g.weight), num_(g.lossG), num_(g.cutPct), num_(g.customerFine), num_(g.rate), num_(g.amount),
           g.source === 'sale' ? 'In a bill' : 'Bought', g.status].concat(owner ? [num_(g.ourPurityPct), num_(g.ourFine)] : []);
       })
     };

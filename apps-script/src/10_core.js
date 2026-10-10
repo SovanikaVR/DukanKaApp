@@ -143,6 +143,43 @@ function customerSave_(user, d) {
   return rec;
 }
 
+/**
+ * Many customers at once (from an Excel / CSV file or the phone's contacts). Up to 500 per call.
+ * A customer already saved (same mobile and first name) is skipped, so importing the same file twice is safe.
+ * An opening baki in the file goes to the Baki list as "Opening baki".
+ */
+function customersImport_(user, d) {
+  var list = (d.rows || []).slice(0, 500);
+  req_(list.length, 'Nothing to import');
+  var seen = {};
+  rows_('Customers').forEach(function (c) { if (c.mobile) seen[c.mobile + '|' + c.firstName.toLowerCase()] = 1; });
+  var add = [], dues = [], skipped = [], date = today_(), bakiTotal = 0;
+  list.forEach(function (r, i) {
+    var first = String(r.firstName || '').trim(), last = String(r.lastName || '').trim();
+    if (!first && last) { first = last; last = ''; }
+    var mobile = cleanMobile_(r.mobile);
+    if (!first) { skipped.push({ row: r.row || i + 1, reason: 'no name' }); return; }
+    if (mobile && mobile.length !== 10) { skipped.push({ row: r.row || i + 1, name: first, reason: 'mobile is not 10 digits' }); return; }
+    var key = mobile + '|' + first.toLowerCase();
+    if (mobile && seen[key]) { skipped.push({ row: r.row || i + 1, name: first, reason: 'already saved' }); return; }
+    seen[key] = 1;
+    var baki = round2_(num_(String(r.baki || '').replace(/[₹,\s]/g, '')));
+    var rec = { id: uid_('K'), firstName: first.slice(0, 60), lastName: last.slice(0, 60), mobile: mobile,
+      village: String(r.village || '').trim().slice(0, 60), address: String(r.address || '').trim().slice(0, 200),
+      notes: String(r.notes || '').trim().slice(0, 200), createdAt: nowIso_(), by: user.username };
+    add.push(rec);
+    if (baki > 0) {
+      bakiTotal += baki;
+      dues.push({ id: uid_('D'), date: date, customerId: rec.id, customerName: customerName_(rec), mobile: mobile, amount: baki,
+        refType: 'adjust', refId: '', notes: 'Opening baki', by: user.username, at: nowIso_() });
+    }
+  });
+  insertMany_('Customers', add);
+  insertMany_('Dues', dues);
+  audit_(user, 'customers.import', '', { added: add.length, skipped: skipped.length, baki: bakiTotal });
+  return { added: add.length, skipped: skipped, bakiCustomers: dues.length, baki: round2_(bakiTotal) };
+}
+
 /** Uses d.customerId, or creates/finds the customer described in d.customer. */
 function ensureCustomer_(user, d) {
   if (d.customerId) {

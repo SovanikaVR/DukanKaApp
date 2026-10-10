@@ -162,7 +162,7 @@ export async function ask(title, fields, okLabel) {
       const s = seg(f.options, f.value, null);
       return { key: f.key, el: h('div', { class: 'f' }, h('span', { class: 'lbl' }, f.label), s), get: () => s.get() };
     }
-    const el = field(f.label, { type: f.type, value: f.value });
+    const el = field(f.label, { type: f.type, value: f.value, rows: f.rows });
     return { key: f.key, el, get: () => el.input.value };
   });
   setTimeout(() => { const i = document.querySelector('.modal .inp'); if (i) i.focus(); }, 50);

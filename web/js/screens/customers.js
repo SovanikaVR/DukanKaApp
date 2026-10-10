@@ -1,9 +1,10 @@
 /* Customer search, profile and edit. */
 import { call } from '../api.js';
-import { modOn, isViewer } from '../state.js';
+import { modOn, isViewer, isOwner } from '../state.js';
 import { h, screen, field, card, grid, busy, toast, inr, fdate, g3, icon, empty, go, sec, ask, miniLoading } from '../ui.js';
 import { t } from '../i18n.js';
 import { exportCsvButton } from './exports.js';
+import { sendBakiReminder } from '../baki.js';
 import { rememberCustomer, recentCustomers, rememberWords, recentWords, forgetRecent } from '../recent.js';
 
 export async function search(params, query) {
@@ -58,7 +59,8 @@ export async function search(params, query) {
   }
   run();
   return screen('Find customer', null, [q, recentBox, sec(t('Village')), villages, count, list],
-    isViewer() ? null : h('a', { class: 'btn2', href: '#/customer-edit/new' }, '+ ' + t('New customer')), { right: exportCsvButton('customers', () => ({})) });
+    isViewer() ? null : h('div', { class: 'grid g2' }, h('a', { class: 'btn2', href: '#/customer-edit/new' }, '+ ' + t('New customer')),
+      isOwner() ? h('a', { class: 'btn2', href: '#/customers-import' }, '⬆ ' + t('Import many')) : null), { right: exportCsvButton('customers', () => ({})) });
 }
 
 export async function profile({ id }) {
@@ -95,7 +97,9 @@ export async function profile({ id }) {
       wa ? h('a', { class: 'pill', href: wa, target: '_blank', rel: 'noopener' }, icon('wa', 18), 'WhatsApp') : null,
       c.mobile ? h('a', { class: 'pill', href: 'tel:+91' + c.mobile }, icon('phone', 18), 'Call') : null,
       isViewer() ? null : h('a', { class: 'pill', href: '#/customer-edit/' + c.id }, 'Edit'),
-      d.udhaar > 0 && !isViewer() ? h('button', { class: 'pill', onclick: () => payUdhaar(c.id, d.udhaar) }, 'Baki received') : null),
+      d.udhaar > 0 && !isViewer() ? h('button', { class: 'pill', onclick: () => payUdhaar(c.id, d.udhaar) }, 'Baki received') : null,
+      d.udhaar > 0 && c.mobile ? h('button', { class: 'pill', onclick: () => sendBakiReminder({ customerName: d.name, mobile: c.mobile, due: d.udhaar,
+        since: (d.dues || []).reduce((m, x) => (!m || x.date < m ? x.date : m), '') }) }, '💬 ' + t('WhatsApp reminder')) : null),
     modOn('girvi') ? [sec('GIRVI · ' + loans.length + ' OPEN'), loans.length ? loans : empty('No open girvi')] : null,
     modOn('orders') ? [sec('ORDERS · ' + orders.length + ' PENDING'), orders.length ? orders : empty('No pending orders')] : null,
     modOn('repair') && repairs.length ? [sec('REPAIRS'), repairs] : null,

@@ -33,7 +33,7 @@ function reportDaily_(date) {
   }, 0);
   var melts = rows_('Melts').filter(function (m) { return m.date === date; });
   var meltGain = melts.reduce(function (a, m) {
-    return a + num_(m.actualFine) * num_(rate.g24) - num_(m.paidAmount) - num_(m.cost);
+    return a + num_(m.actualFine) * num_(m.metal === 'silver' ? rate.silver : rate.g24) - num_(m.paidAmount) - num_(m.cost);
   }, 0);
   var cashEntries = rows_('Cash').filter(function (c) { return c.date === date; });
   var expenses = cashEntries.filter(function (c) { return c.dir === 'out' && c.category === 'expense'; })

@@ -3,6 +3,7 @@ import { call, apiUrl } from '../api.js';
 import { S, isOwner, refresh, modules } from '../state.js';
 import { h, screen, field, card, grid, seg, busy, toast, sec, go, ask, num } from '../ui.js';
 import { getLang, setLang, t } from '../i18n.js';
+import { BAKI_DEFAULT } from '../baki.js';
 
 const FORMULAS = [
   ['formula_interest', 'Girvi interest', { Principal: 60000, Rate: 2, Days: 116 }],
@@ -43,6 +44,9 @@ export async function render() {
     f('interest_default_rate', 'Girvi ₹ per 100 / month', 'num'), f('interest_min_days', 'Girvi minimum days', 'num'),
     f('purity_24k', '24K purity %', 'num'), f('purity_22k', '22K purity %', 'num'), f('purity_18k', '18K purity %', 'num'),
     f('report_email', 'Send nightly report to (email)')];
+  const bakiMsg = f('baki_msg', 'WhatsApp message for baki — {name} {amount} {since} {shop} are filled in (blank = standard)', 'textarea');
+  bakiMsg.input.rows = 5;
+  bakiMsg.input.placeholder = BAKI_DEFAULT[s.bill_lang] || BAKI_DEFAULT.en;
   const bf = (key, label, type) => f(key, label, type);
   let mkType = s.making_default_type || 'perg', rcm = s.oldgold_rcm === 'true';
   const mkSeg = seg([{ value: 'perg', label: 'Making ₹ per gram' }, { value: 'pct', label: 'Making %' }], mkType, (v) => { mkType = v; });
@@ -79,7 +83,7 @@ export async function render() {
 
   const save = h('button', { class: 'btn', onclick: () => busy(save, async () => {
     const data = {};
-    [...shop, ...std, mkPct, ...silver].forEach((el) => { data[el.key] = el.input.value.trim(); });
+    [...shop, ...std, mkPct, ...silver, bakiMsg].forEach((el) => { data[el.key] = el.input.value.trim(); });
     Object.assign(data, { making_default_type: mkType, oldgold_rcm: rcm ? 'true' : 'false' });
     data.gst_enabled = gstOn ? 'true' : 'false';
     const m = {};
@@ -129,6 +133,7 @@ export async function render() {
       h('a', { class: 'btn2', href: '#/bill-design' }, '🎨 ' + t('Open bill designer'))),
     sec('STANDARD VALUES · prefilled, always editable on each entry'), card(grid(2, ...std.slice(0, 10)), std[10]),
     card(h('div', { class: 'f' }, h('span', { class: 'lbl' }, t('Making on new bills')), mkSeg), grid(3, mkPct, ...silver)),
+    card(bakiMsg, h('div', { class: 'hint' }, t('Used by the 💬 WhatsApp reminder button in the Baki list. You can still change the message before sending.'))),
     card(h('div', { class: 'f' }, h('span', { class: 'lbl' }, t('Old gold bought from customers')), rcmSeg),
       h('div', { class: 'hint' }, t('In an exchange, GST is charged on the full price of the new jewellery (old gold is not deducted before GST). Gold bought from a private person is normally not taxed; confirm with your CA.'))),
     sec('MODULES · switch off what this shop does not use'), card(modBoxes, h('div', { class: 'hint' }, 'Switched-off modules hide from the app; their data stays safe.')),
@@ -140,6 +145,7 @@ export async function render() {
         h('button', { class: 'btn2 small', onclick: archive }, 'Archive old year')),
       h('button', { class: 'btn2 small', onclick: everything }, '⬇ ' + t('Download all data (Excel)')),
       h('button', { class: 'btn2 small', onclick: check }, t('Check my data')),
+      h('a', { class: 'btn2 small', href: '#/customers-import' }, '⬆ ' + t('Import customers from Excel / contacts')),
       h('div', { class: 'hint' }, t('One Excel file with every list (customers, baki, bills, girvi, orders, repairs, old gold, stock, cash, wholesalers/karigars) plus ready tabs to import parties and items into another app like Vyapar. Your Google Sheet itself is also yours: File → Download → Excel.')),
       h('a', { class: 'link', href: '#/connect' }, 'Change shop link'))
   ], save);
