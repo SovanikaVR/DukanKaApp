@@ -253,6 +253,22 @@ test('shop pictures travel once: bootstrap and bills carry only a reference', ()
   assert.ok(/^img:/.test(ok('sale.get', { id: bill.id }, T).shop.logo));
 });
 
+test('baki: a wrong payment can be undone by the owner; cleared list shows who cleared it', () => {
+  const c = ok('customers.save', { firstName: 'Undo', mobile: '9000000077' }, T);
+  ok('dues.adjust', { customerId: c.id, amount: 4000, notes: 'old baki' }, T);
+  const cashBefore = ok('cash.list', {}, T).closing;
+  ok('dues.pay', { customerId: c.id, amount: 4000, mode: 'cash' }, T);
+  assert.ok(!ok('dues.list', {}, T).list.some((r) => r.customerId === c.id));
+  const cl = ok('dues.list', { cleared: true }, T).list.find((r) => r.customerId === c.id);
+  const payItem = cl.items.find((x) => x.refType === 'payment');
+  assert.strictEqual(payItem.by, 'viju');
+  assert.strictEqual(ok('dues.undoPay', { id: payItem.id, reason: 'tapped by mistake' }, T).udhaar, 4000);
+  assert.strictEqual(ok('dues.list', {}, T).list.find((r) => r.customerId === c.id).due, 4000);
+  assert.strictEqual(ok('cash.list', {}, T).closing, cashBefore); // the cash entry of that payment is gone too
+  assert.ok(/already undone/.test(call('dues.undoPay', { id: payItem.id }, T).error));
+  ok('dues.pay', { customerId: c.id, amount: 4000, mode: 'cash' }, T);
+});
+
 test('reports', () => {
   const d = ok('reports.daily', { date: '2026-10-08' }, T);
   assert.strictEqual(d.sales.count, 2);

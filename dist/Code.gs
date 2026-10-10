@@ -10,7 +10,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.10.0';
+var APP_VERSION = '1.10.1';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -115,7 +115,7 @@ var DEFAULT_SETTINGS = {
 var OWNER_ONLY = {
   'settings.save': 1, 'users.list': 1, 'users.save': 1, 'sale.void': 1, 'cash.opening': 1,
   'admin.archive': 1, 'admin.backupNow': 1, 'loans.edit': 1, 'loans.void': 1,
-  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'admin.check': 1, 'stock.update': 1, 'dues.adjust': 1, 'customers.import': 1, 'auth.logoutAll': 1, 'export.list': 1
+  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'admin.check': 1, 'stock.update': 1, 'dues.adjust': 1, 'customers.import': 1, 'auth.logoutAll': 1, 'dues.undoPay': 1, 'export.list': 1
 };
 
 /* ===== 01_util.js ===== */
@@ -444,6 +444,13 @@ function tz_() { return 'Asia/Kolkata'; }
 function nowIso_() { return Utilities.formatDate(new Date(), tz_(), "yyyy-MM-dd'T'HH:mm:ss"); }
 
 function today_() { return Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd'); }
+
+/** yyyy-MM-dd moved by n days (n may be negative). */
+function shiftDate_(dateStr, n) {
+  var p = String(dateStr).split('-');
+  var d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2]) + n * 86400000);
+  return d.toISOString().slice(0, 10);
+}
 
 /** Indian financial year label for a yyyy-MM-dd date, e.g. 2026-10-08 -> "26-27". */
 function fyOf_(dateStr) {
@@ -819,6 +826,7 @@ var ROUTES = {
   'stock.photo': function (u, d) { return stockPhoto_(d); },
   'customers.import': function (u, d) { return customersImport_(u, d); },
   'customers.sync': function (u, d) { return customersSync_(d); },
+  'dues.undoPay': function (u, d) { return duesUndoPay_(u, d); },
   'melt.create': function (u, d) { return meltCreate_(u, d); },
   'melt.list': function (u, d) { var m = meltList_(d); if (u.role !== 'owner') m.forEach(function (x) { delete x.gain; delete x.gainValue; delete x.cost; delete x.paidAmount; }); return m; },
   'fine.summary': function () { return fineSummary_(); },
@@ -2845,14 +2853,18 @@ function duesList_(d) {
     r.due = round2_(r.due + num_(x.amount));
     if (x.date < r.since) r.since = x.date;
     if (x.date > r.last) r.last = x.date;
-    r.items.push({ id: x.id, date: x.date, amount: num_(x.amount), refType: x.refType, refId: x.refId, notes: x.notes });
+    r.items.push({ id: x.id, date: x.date, amount: num_(x.amount), refType: x.refType, refId: x.refId, notes: x.notes, by: x.by, at: x.at });
   });
   var q = String(d.q || '').toLowerCase();
+  // d.cleared: customers whose baki went to zero in the last 60 days — to see who cleared it, and undo a mistake.
+  var since60 = shiftDate_(today_(), -60);
   var list = Object.keys(by).map(function (k) { return by[k]; }).filter(function (r) {
-    if (r.due <= 0.5) return false;
+    if (d.cleared) { if (r.due > 0.5 || r.last < since60 || !r.items.some(function (x) { return x.amount > 0; })) return false; }
+    else if (r.due <= 0.5) return false;
     return !q || (r.customerName + ' ' + r.mobile).toLowerCase().indexOf(q) >= 0;
   });
-  list.sort(function (a, b) { return a.since < b.since ? -1 : 1; });
+  if (d.cleared) list.sort(function (a, b) { return a.last < b.last ? 1 : -1; });
+  else list.sort(function (a, b) { return a.since < b.since ? -1 : 1; });
   var total = Math.round(list.reduce(function (a, r) { return a + r.due; }, 0)), count = list.length;
   // A page at a time (oldest baki first): the phone gets a small answer even when hundreds of customers owe.
   var limit = Math.min(Math.max(parseInt(d.limit, 10) || 100, 20), 1000);
@@ -2862,7 +2874,11 @@ function duesList_(d) {
   list.forEach(function (r) {
     var c = names[r.customerId] || (list.length <= 3 ? find_('Customers', r.customerId) : null);
     if (c) { r.customerName = customerName_(c); r.mobile = c.mobile; r.village = c.village; }
-    r.items = r.items.slice(-6).reverse().map(function (x) { return { date: x.date, amount: x.amount, refType: x.refType, notes: x.notes }; });
+    var undone = {};
+    r.items.forEach(function (x) { var m = /Payment undone \((D\w+)\)/.exec(x.notes || ''); if (m) undone[m[1]] = 1; });
+    r.items = r.items.slice(-8).reverse().map(function (x) {
+      return { id: x.id, date: x.date, amount: x.amount, refType: x.refType, notes: x.notes, by: x.by, undone: !!undone[x.id] };
+    });
   });
   return { list: list, total: total, count: count, more: count > list.length };
 }
@@ -2878,6 +2894,22 @@ function duesPay_(user, d) {
   var cr = cash_(user, 'in', d.mode === 'upi' ? 'upi' : 'cash', amt, 'udhaar', 'udhaar', c.id, customerName_(c), date);
   duesAdd_(user, c, -amt, 'payment', '', 'Received (' + cr.id + ')' + (d.notes ? ' ' + d.notes : ''), date);
   audit_(user, 'dues.pay', c.id, { amount: amt });
+  return { udhaar: customerUdhaar_(c.id) };
+}
+
+/** Owner: a payment entered by mistake (customer did not pay). The baki comes back and the cash / UPI entry
+ *  of that payment is removed from the cash book. Can be done once per payment. */
+function duesUndoPay_(user, d) {
+  var x = find_('Dues', d.id);
+  req_(x && x.refType === 'payment' && num_(x.amount) < 0, 'This is not a payment');
+  var already = rows_('Dues').some(function (y) { return y.customerId === x.customerId && String(y.notes).indexOf('Payment undone (' + x.id + ')') >= 0; });
+  req_(!already, 'This payment is already undone');
+  var c = find_('Customers', x.customerId);
+  req_(c, 'Customer not found');
+  var m = /Received \((C\w+)\)/.exec(x.notes || '');
+  if (m) { var cr = find_('Cash', m[1]); if (cr && cr.status !== 'void') update_('Cash', cr.id, { status: 'void' }); }
+  duesAdd_(user, c, -num_(x.amount), 'adjust', '', 'Payment undone (' + x.id + ')' + (d.reason ? ': ' + String(d.reason).slice(0, 100) : ''), today_());
+  audit_(user, 'dues.undoPay', x.id, { customer: c.id, amount: x.amount, reason: d.reason || '' });
   return { udhaar: customerUdhaar_(c.id) };
 }
 

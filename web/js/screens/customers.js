@@ -1,7 +1,7 @@
 /* Customer search, profile and edit. */
 import { call } from '../api.js';
 import { modOn, isViewer, isOwner } from '../state.js';
-import { h, screen, field, card, grid, busy, toast, inr, fdate, g3, icon, empty, go, sec, ask, miniLoading } from '../ui.js';
+import { h, screen, field, card, grid, busy, toast, inr, fdate, g3, icon, empty, go, sec, ask, miniLoading, confirmBox } from '../ui.js';
 import { t } from '../i18n.js';
 import { exportCsvButton } from './exports.js';
 import { sendBakiReminder } from '../baki.js';
@@ -134,10 +134,16 @@ function stat(label, value) {
 }
 
 async function payUdhaar(customerId, due) {
-  const v = await ask('Baki received · due ' + inr(due), [
-    { key: 'amount', label: 'Amount (₹)', type: 'num', value: String(Math.round(due)) },
+  const v = await ask(t('Baki received') + ' · ' + t('due') + ' ' + inr(due), [
+    { key: 'amount', label: t('Amount received (₹)'), type: 'num', value: '' },
     { key: 'mode', label: 'Paid by', options: [{ value: 'cash', label: 'Cash' }, { value: 'upi', label: 'UPI' }], value: 'cash' }]);
   if (!v) return;
+  const amt = parseFloat(v.amount) || 0;
+  if (amt <= 0) { toast(t('Type the amount the customer gave'), 'err'); return; }
+  if (amt > due + 0.5) { toast(t('More than the baki') + ' (' + inr(due) + ')', 'err'); return; }
+  const left = Math.max(0, Math.round(due - amt));
+  if (!await confirmBox(t('Baki received'), inr(amt) + ' ' + (v.mode === 'upi' ? 'UPI' : t('cash')) + '. ' +
+    (left ? t('Baki left') + ' ' + inr(left) : t('Baki will be fully cleared')) + '. ' + t('OK?'), t('Yes, received'))) return;
   await busy(null, async () => {
     await call('dues.pay', { customerId, amount: v.amount, mode: v.mode });
     toast('Saved');

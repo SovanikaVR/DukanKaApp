@@ -163,8 +163,30 @@ const BASE = 'http://localhost:8787';
     await shot('12-dues');
     await page.locator('.due-row', { hasText: 'Ramesh Patil' }).click();
     await page.getByRole('button', { name: 'Payment received' }).click();
+    // nothing typed: a stray Save must not clear the baki
     await page.locator('.modal').getByRole('button', { name: 'Save' }).click();
+    await page.getByText('Type the amount the customer gave').waitFor();
+    await page.locator('.due-row', { hasText: 'Ramesh Patil' }).waitFor();
+    await page.getByRole('button', { name: 'Payment received' }).click();
+    await page.locator('.modal').getByLabel(/Amount received/).fill('5000');
+    await page.locator('.modal').getByRole('button', { name: 'Save' }).click();
+    await page.locator('.modal').getByText('Baki will be fully cleared').waitFor();
+    await page.locator('.modal').getByRole('button', { name: 'Yes, received' }).click();
     await page.getByText('Fully paid').waitFor();
+    await page.getByText('Nobody owes anything').waitFor();
+    // the owner can see who cleared it, and undo a wrong payment
+    await page.getByRole('button', { name: 'Cleared (60 days)' }).click();
+    await page.locator('.due-row', { hasText: 'Ramesh Patil' }).click();
+    await page.getByText(/by viju/).first().waitFor();
+    await page.getByRole('button', { name: 'Not paid? Undo this payment' }).click();
+    await page.locator('.modal').getByRole('button', { name: 'Undo payment' }).click();
+    await page.locator('.due-total', { hasText: '5,000' }).waitFor(); // baki is back in the Owing list
+    await shot('12b-dues-undo');
+    await page.locator('.due-row', { hasText: 'Ramesh Patil' }).click();
+    await page.getByRole('button', { name: 'Payment received' }).click();
+    await page.locator('.modal').getByLabel(/Amount received/).fill('5000');
+    await page.locator('.modal').getByRole('button', { name: 'Save' }).click();
+    await page.locator('.modal').getByRole('button', { name: 'Yes, received' }).click();
     await page.getByText('Nobody owes anything').waitFor();
   });
 

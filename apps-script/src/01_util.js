@@ -324,6 +324,13 @@ function nowIso_() { return Utilities.formatDate(new Date(), tz_(), "yyyy-MM-dd'
 
 function today_() { return Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd'); }
 
+/** yyyy-MM-dd moved by n days (n may be negative). */
+function shiftDate_(dateStr, n) {
+  var p = String(dateStr).split('-');
+  var d = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2]) + n * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
 /** Indian financial year label for a yyyy-MM-dd date, e.g. 2026-10-08 -> "26-27". */
 function fyOf_(dateStr) {
   var y = parseInt(dateStr.slice(0, 4), 10);

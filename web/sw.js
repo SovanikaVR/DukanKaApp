@@ -1,5 +1,5 @@
 /* Service worker: keeps the app screens on the phone so it opens fast. Shop data always comes live. */
-const VERSION = 'dk-v1.10.0';
+const VERSION = 'dk-v1.10.1';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css', './js/calc.js', './js/main.js', './js/api.js',
   './js/ui.js', './js/i18n.js', './js/i18n-hi.js', './js/help-content.js', './js/xlsx.js', './js/pdf.js', './js/state.js', './js/picker.js', './js/store.js', './js/custlocal.js', './js/images.js', './js/recent.js', './js/baki.js', './js/photos.js', './js/xlsxread.js', './js/bill.js',

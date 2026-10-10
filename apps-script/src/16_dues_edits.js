@@ -24,14 +24,18 @@ function duesList_(d) {
     r.due = round2_(r.due + num_(x.amount));
     if (x.date < r.since) r.since = x.date;
     if (x.date > r.last) r.last = x.date;
-    r.items.push({ id: x.id, date: x.date, amount: num_(x.amount), refType: x.refType, refId: x.refId, notes: x.notes });
+    r.items.push({ id: x.id, date: x.date, amount: num_(x.amount), refType: x.refType, refId: x.refId, notes: x.notes, by: x.by, at: x.at });
   });
   var q = String(d.q || '').toLowerCase();
+  // d.cleared: customers whose baki went to zero in the last 60 days — to see who cleared it, and undo a mistake.
+  var since60 = shiftDate_(today_(), -60);
   var list = Object.keys(by).map(function (k) { return by[k]; }).filter(function (r) {
-    if (r.due <= 0.5) return false;
+    if (d.cleared) { if (r.due > 0.5 || r.last < since60 || !r.items.some(function (x) { return x.amount > 0; })) return false; }
+    else if (r.due <= 0.5) return false;
     return !q || (r.customerName + ' ' + r.mobile).toLowerCase().indexOf(q) >= 0;
   });
-  list.sort(function (a, b) { return a.since < b.since ? -1 : 1; });
+  if (d.cleared) list.sort(function (a, b) { return a.last < b.last ? 1 : -1; });
+  else list.sort(function (a, b) { return a.since < b.since ? -1 : 1; });
   var total = Math.round(list.reduce(function (a, r) { return a + r.due; }, 0)), count = list.length;
   // A page at a time (oldest baki first): the phone gets a small answer even when hundreds of customers owe.
   var limit = Math.min(Math.max(parseInt(d.limit, 10) || 100, 20), 1000);
@@ -41,7 +45,11 @@ function duesList_(d) {
   list.forEach(function (r) {
     var c = names[r.customerId] || (list.length <= 3 ? find_('Customers', r.customerId) : null);
     if (c) { r.customerName = customerName_(c); r.mobile = c.mobile; r.village = c.village; }
-    r.items = r.items.slice(-6).reverse().map(function (x) { return { date: x.date, amount: x.amount, refType: x.refType, notes: x.notes }; });
+    var undone = {};
+    r.items.forEach(function (x) { var m = /Payment undone \((D\w+)\)/.exec(x.notes || ''); if (m) undone[m[1]] = 1; });
+    r.items = r.items.slice(-8).reverse().map(function (x) {
+      return { id: x.id, date: x.date, amount: x.amount, refType: x.refType, notes: x.notes, by: x.by, undone: !!undone[x.id] };
+    });
   });
   return { list: list, total: total, count: count, more: count > list.length };
 }
@@ -57,6 +65,22 @@ function duesPay_(user, d) {
   var cr = cash_(user, 'in', d.mode === 'upi' ? 'upi' : 'cash', amt, 'udhaar', 'udhaar', c.id, customerName_(c), date);
   duesAdd_(user, c, -amt, 'payment', '', 'Received (' + cr.id + ')' + (d.notes ? ' ' + d.notes : ''), date);
   audit_(user, 'dues.pay', c.id, { amount: amt });
+  return { udhaar: customerUdhaar_(c.id) };
+}
+
+/** Owner: a payment entered by mistake (customer did not pay). The baki comes back and the cash / UPI entry
+ *  of that payment is removed from the cash book. Can be done once per payment. */
+function duesUndoPay_(user, d) {
+  var x = find_('Dues', d.id);
+  req_(x && x.refType === 'payment' && num_(x.amount) < 0, 'This is not a payment');
+  var already = rows_('Dues').some(function (y) { return y.customerId === x.customerId && String(y.notes).indexOf('Payment undone (' + x.id + ')') >= 0; });
+  req_(!already, 'This payment is already undone');
+  var c = find_('Customers', x.customerId);
+  req_(c, 'Customer not found');
+  var m = /Received \((C\w+)\)/.exec(x.notes || '');
+  if (m) { var cr = find_('Cash', m[1]); if (cr && cr.status !== 'void') update_('Cash', cr.id, { status: 'void' }); }
+  duesAdd_(user, c, -num_(x.amount), 'adjust', '', 'Payment undone (' + x.id + ')' + (d.reason ? ': ' + String(d.reason).slice(0, 100) : ''), today_());
+  audit_(user, 'dues.undoPay', x.id, { customer: c.id, amount: x.amount, reason: d.reason || '' });
   return { udhaar: customerUdhaar_(c.id) };
 }
 

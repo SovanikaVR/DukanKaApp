@@ -72,6 +72,7 @@ var ROUTES = {
   'stock.photo': function (u, d) { return stockPhoto_(d); },
   'customers.import': function (u, d) { return customersImport_(u, d); },
   'customers.sync': function (u, d) { return customersSync_(d); },
+  'dues.undoPay': function (u, d) { return duesUndoPay_(u, d); },
   'melt.create': function (u, d) { return meltCreate_(u, d); },
   'melt.list': function (u, d) { var m = meltList_(d); if (u.role !== 'owner') m.forEach(function (x) { delete x.gain; delete x.gainValue; delete x.cost; delete x.paidAmount; }); return m; },
   'fine.summary': function () { return fineSummary_(); },
