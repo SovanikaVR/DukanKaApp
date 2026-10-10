@@ -71,6 +71,7 @@ var ROUTES = {
   'stock.photoSet': function (u, d) { return stockPhotoSet_(u, d); },
   'stock.photo': function (u, d) { return stockPhoto_(d); },
   'customers.import': function (u, d) { return customersImport_(u, d); },
+  'customers.sync': function (u, d) { return customersSync_(d); },
   'melt.create': function (u, d) { return meltCreate_(u, d); },
   'melt.list': function (u, d) { var m = meltList_(d); if (u.role !== 'owner') m.forEach(function (x) { delete x.gain; delete x.gainValue; delete x.cost; delete x.paidAmount; }); return m; },
   'fine.summary': function () { return fineSummary_(); },
@@ -103,7 +104,7 @@ var ROUTES = {
 };
 
 var READ_ONLY = {
-  'ping': 1, 'bootstrap': 1, 'settings.images': 1, 'rates.list': 1, 'customers.search': 1, 'customers.get': 1, 'sale.list': 1,
+  'ping': 1, 'bootstrap': 1, 'settings.images': 1, 'customers.sync': 1, 'rates.list': 1, 'customers.search': 1, 'customers.get': 1, 'sale.list': 1,
   'sale.get': 1, 'oldgold.list': 1, 'loans.list': 1, 'loans.get': 1, 'orders.list': 1, 'orders.get': 1,
   'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'stock.photo': 1, 'melt.list': 1, 'fine.summary': 1,
   'parties.list': 1, 'parties.ledger': 1, 'cash.list': 1, 'reports.daily': 1, 'reports.month': 1,
@@ -217,7 +218,7 @@ function tabVersions_(cache, names) {
   return names.map(function (n) { return n + ':' + got['sv_' + n]; }).join(',');
 }
 
-var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1, 'admin.check': 1, 'stock.photo': 1 };
+var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1, 'admin.check': 1, 'stock.photo': 1, 'customers.sync': 1 };
 
 function cacheKey_(raw) {
   return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, raw, Utilities.Charset.UTF_8));

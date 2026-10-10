@@ -5,6 +5,7 @@ import { h, screen, field, card, grid, busy, toast, inr, fdate, g3, icon, empty,
 import { t } from '../i18n.js';
 import { exportCsvButton } from './exports.js';
 import { sendBakiReminder } from '../baki.js';
+import { searchLocal, hasLocalCustomers, syncCustomers } from '../custlocal.js';
 import { rememberCustomer, recentCustomers, rememberWords, recentWords, forgetRecent } from '../recent.js';
 
 export async function search(params, query) {
@@ -16,7 +17,7 @@ export async function search(params, query) {
   const list = h('div', { class: 'list' }, miniLoading());
   const count = h('div', { class: 'hint' });
   let timer;
-  q.input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 250); });
+  q.input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 120); });
 
   // Keep the search in the address, so Back from a customer brings the same search and results again.
   const keepInUrl = () => {
@@ -38,11 +39,28 @@ export async function search(params, query) {
       sec(t('All customers')));
   };
 
+  let seq = 0;
   async function run() {
     keepInUrl();
     drawRecent();
+    const my = ++seq;
+    const qv = q.input.value.trim();
+    // Instant: the customer list kept on the phone. Then the shop's answer (adds the girvi / order tags).
+    let shown = false;
+    if (await hasLocalCustomers()) {
+      if (my !== seq) return;
+      draw(await searchLocal(qv, village)); shown = true;
+      await new Promise((r) => setTimeout(r, 600)); // ask the shop only once typing stops
+      if (my !== seq) return;
+    }
     try {
-      const r = await call('customers.search', { q: q.input.value.trim(), village });
+      const r = await call('customers.search', { q: qv, village });
+      if (my !== seq) return;
+      draw(r);
+    } catch (e) { if (!shown) list.replaceChildren(h('div', { class: 'error-box' }, e.message)); }
+  }
+  function draw(r) {
+    {
       villages.replaceChildren(
         h('button', { class: 'chip' + (village ? '' : ' on'), onclick: () => { village = ''; run(); } }, 'All'),
         ...r.villages.map((v) => h('button', { class: 'chip' + (v === village ? ' on' : ''), onclick: () => { village = v; run(); } }, v)));
@@ -55,8 +73,9 @@ export async function search(params, query) {
           c.loans ? h('span', { class: 'tag gold' }, c.loans + ' girvi') : null,
           c.orders ? h('span', { class: 'tag' }, c.orders + ' order') : null,
           c.repairs ? h('span', { class: 'tag' }, c.repairs + ' repair') : null))) : [empty('No customer found')]));
-    } catch (e) { list.replaceChildren(h('div', { class: 'error-box' }, e.message)); }
+    }
   }
+  syncCustomers().then(() => { if (!q.input.value.trim()) return; run(); });
   run();
   return screen('Find customer', null, [q, recentBox, sec(t('Village')), villages, count, list],
     isViewer() ? null : h('div', { class: 'grid g2' }, h('a', { class: 'btn2', href: '#/customer-edit/new' }, '+ ' + t('New customer')),

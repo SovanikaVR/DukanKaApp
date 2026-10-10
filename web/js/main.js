@@ -1,5 +1,6 @@
 /* DukanKaApp — router and app shell. */
-import { apiUrl, token, onSessionExpired, wipeLocal } from './api.js';
+import { apiUrl, token, onSessionExpired, wipeLocal, preload, refreshNow } from './api.js';
+import { syncCustomers } from './custlocal.js';
 import { S, refresh, modOn, isOwner, isViewer, loadCached, clearCached } from './state.js';
 import { h, icon, toast, loading, go, todayStr, friendly, isSaving } from './ui.js';
 import { t, setLang, getLang } from './i18n.js';
@@ -102,6 +103,7 @@ async function render() {
     if (seq !== renderSeq) return;
     app.replaceChildren(shell(view, m.name));
     if (!window._dkKeepScroll) window.scrollTo(0, 0);
+    if (!window._dkPreloaded && S.user) { window._dkPreloaded = true; backgroundSync(2500); }
     const first = app.querySelector('[autofocus]');
     if (first) first.focus();
   } catch (e) {
@@ -193,6 +195,66 @@ function shell(view, name) {
       icon(ic, 18), h('span', t(label)))));
   return h('div', { class: 'layout' }, nav, h('div', { class: 'content' }, view));
 }
+
+/* ---------- Keep the phone's copy fresh in the background ----------
+ * After the app opens (and some seconds after each save) the main screens and the customer list are loaded into
+ * the phone, one request at a time, so tapping them later is instant. */
+function mainScreens() {
+  const list = [['home.summary', {}], ['dues.list', { q: '' }]];
+  if (modOn('girvi')) list.push(['loans.list', { status: 'open', q: '' }]);
+  if (modOn('sale')) list.push(['sale.list', { q: '', from: '', to: '', fy: '' }]);
+  if (modOn('stock')) list.push(['stock.summary', {}], ['stock.list', { metal: 'gold', category: '' }]);
+  if (modOn('orders')) list.push(['orders.list', { status: 'pending' }]);
+  if (modOn('repair')) list.push(['repairs.list', { status: 'pending' }]);
+  return list;
+}
+let bgTimer = null;
+function backgroundSync(delay) {
+  clearTimeout(bgTimer);
+  bgTimer = setTimeout(async () => {
+    if (!token() || !S.user || !navigator.onLine) return;
+    await syncCustomers(true);
+    await preload(mainScreens());
+  }, delay);
+}
+document.addEventListener('dk-saved', () => backgroundSync(8000));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') backgroundSync(3000); });
+window.addEventListener('online', () => backgroundSync(1000));
+
+// Small "Updating…" note while fresh data is being fetched in the background.
+const syncChip = document.createElement('div');
+syncChip.className = 'sync-chip';
+syncChip.setAttribute('aria-live', 'polite');
+document.addEventListener('dk-sync', (e) => {
+  syncChip.textContent = '↻ ' + t('Updating…');
+  syncChip.classList.toggle('on', e.detail > 0);
+  if (!syncChip.isConnected) document.body.appendChild(syncChip);
+});
+
+// Pull down on a list to get fresh data from the shop now.
+(function pullToRefresh() {
+  let startY = null, pulled = 0;
+  const tip = document.createElement('div');
+  tip.className = 'pull-tip';
+  const route = () => { const m = match((location.hash.replace(/^#\/?/, '') || 'home').split('?')[0]); return m ? m.name : ''; };
+  window.addEventListener('touchstart', (e) => {
+    startY = window.scrollY <= 0 && !document.querySelector('.modal-wrap') && !FORM_ROUTES.has(route()) ? e.touches[0].clientY : null;
+    pulled = 0;
+  }, { passive: true });
+  window.addEventListener('touchmove', (e) => {
+    if (startY === null) return;
+    pulled = e.touches[0].clientY - startY;
+    if (pulled > 20) {
+      if (!tip.isConnected) document.body.appendChild(tip);
+      tip.textContent = pulled > 80 ? '↻ ' + t('Release to refresh') : '↓ ' + t('Pull to refresh');
+      tip.style.opacity = String(Math.min(1, pulled / 80));
+    }
+  }, { passive: true });
+  window.addEventListener('touchend', () => {
+    if (startY !== null && pulled > 80) { refreshNow(); render(); syncCustomers(true); }
+    startY = null; pulled = 0; tip.remove();
+  });
+})();
 
 // Fonts load after the first screen is drawn: a slow network never keeps the app blank (system font until then).
 window.addEventListener('load', () => {

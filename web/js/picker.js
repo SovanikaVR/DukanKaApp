@@ -3,6 +3,7 @@ import { call } from './api.js';
 import { h, field, icon, grid } from './ui.js';
 import { t } from './i18n.js';
 import { rememberCustomer, recentCustomers } from './recent.js';
+import { searchLocal, hasLocalCustomers } from './custlocal.js';
 
 export function customerPicker(query = {}) {
   let chosen = query.c ? { id: query.c, name: query.cn || '', village: query.cv || '', mobile: query.cm || '' } : null;
@@ -38,13 +39,20 @@ export function customerPicker(query = {}) {
     const v = q.input.value.trim();
     const my = ++seq;
     if (v.length < 2) { results.replaceChildren(...(v ? [] : recentButtons()), v ? newBtn : null); return; }
+    const show = (r) => results.replaceChildren(
+      ...r.results.slice(0, 4).map((c) => h('button', { type: 'button', class: 'pick-item', onclick: () => pick(c) },
+        h('b', null, c.name), h('span', null, [c.village, c.mobile].filter(Boolean).join(' · ')))),
+      newBtn);
+    // Instant from the phone's customer list; the shop is asked only when the phone has no list yet.
+    if (await hasLocalCustomers()) {
+      if (my !== seq) return;
+      show(await searchLocal(v));
+      return;
+    }
     try {
       const r = await call('customers.search', { q: v });
       if (my !== seq) return; // a newer search is running: ignore this older answer
-      results.replaceChildren(
-        ...r.results.slice(0, 4).map((c) => h('button', { type: 'button', class: 'pick-item', onclick: () => pick(c) },
-          h('b', null, c.name), h('span', null, [c.village, c.mobile].filter(Boolean).join(' · ')))),
-        newBtn);
+      show(r);
     } catch (e) {
       results.replaceChildren(h('div', { class: 'hint bad' }, e.message));
     }

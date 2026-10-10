@@ -44,6 +44,24 @@ Times are estimates for real Apps Script.
 7. **Smaller answers**: Baki list is paged (100 at a time, "Show more").
 8. **Fonts never block** the first screen (loaded after the app is drawn).
 
+## Phone-first screens (v1.10)
+
+* **Kept answers in IndexedDB** (`web/js/store.js`, `api.js`): every list/screen answer is kept on the phone for a day
+  (up to 200). Opening a screen shows the kept answer at once and fetches the fresh one in the background
+  ("↻ Updating…" chip); if it changed, the screen redraws.
+* **Saves no longer wipe them**: kept answers are marked old and still shown at once, except for 6 seconds right after a
+  save (the screen you go to after saving always waits for fresh data).
+* **Background pre-load**: after the app opens, after each save (8 s later), when the phone comes back online or the app
+  comes to the front, the main screens (Home, Baki, Girvi, Bills, Stock, Orders, Repairs) are loaded one by one.
+* **Customer list on the phone** (`custlocal.js`, server `customers.sync`): search and the customer picker are instant
+  and work offline. Only new customers are downloaded; an edited customer (edit counter in Script Properties) makes the
+  phone fetch the full list once.
+* **Pull down to refresh** any list.
+* **Saves still go straight to the Google Sheet** (no offline saving): bill numbers, stock and balances stay exact.
+
+Measured with every shop answer slowed to 2 s (`DELAY=2000`): Baki list 108 ms, Girvi 36 ms, Bills 37 ms, Stock 35 ms,
+customer search 23 ms; Baki list and search also work with no internet.
+
 ### Next step when a shop has many years of data: year-end close
 Tabs grow forever; the today report and cash book still read a date column of all history. A yearly
 "close" that moves finished records (bills, cash, closed girvi, delivered orders, audit) to a year file and

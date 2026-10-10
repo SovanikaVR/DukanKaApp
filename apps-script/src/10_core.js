@@ -192,6 +192,31 @@ function ensureCustomer_(user, d) {
   return customerSave_(user, d.customer);
 }
 
+/**
+ * The customer list for the phone (for instant search, also without internet). The phone sends how many it has (n)
+ * and the edit counter it saw (e). Customers are only ever added at the bottom, so when nobody edited a customer
+ * since, only the new rows are sent. If someone edited one, the whole list is sent again (rare).
+ */
+function customersSync_(d) {
+  var edits = custEdits_();
+  var list = readCols_('Customers', ['id', 'firstName', 'lastName', 'mobile', 'village']);
+  var n = parseInt(d.n, 10);
+  var from = String(d.e) === edits && n >= 0 && n <= list.length ? n : 0;
+  return {
+    e: edits, total: list.length, from: from,
+    rows: list.slice(from).map(function (c) { return [c.id, c.firstName, c.lastName, c.mobile, c.village]; })
+  };
+}
+function custEdits_() {
+  return PropertiesService.getScriptProperties().getProperty('cust_edits') || '0';
+}
+function bumpCustEdits_() {
+  try {
+    var p = PropertiesService.getScriptProperties();
+    p.setProperty('cust_edits', String((parseInt(p.getProperty('cust_edits'), 10) || 0) + 1));
+  } catch (e) { /* ignore */ }
+}
+
 function customersSearch_(d) {
   var q = String(d.q || '').trim().toLowerCase().replace(/\s+/g, ' ');
   var village = String(d.village || '').trim().toLowerCase();

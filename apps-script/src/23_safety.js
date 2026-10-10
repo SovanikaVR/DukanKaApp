@@ -110,7 +110,7 @@ function restoreFrom_(fileId) {
       tabs++;
     });
     _rowsCache = {};
-    bumpDataVersion_();
+    bumpDataVersion_(); bumpCustEdits_();
     audit_(null, 'restore', fileId, { tabs: tabs });
     return { tabs: tabs };
   } finally { lock.releaseLock(); }

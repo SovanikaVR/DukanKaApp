@@ -227,6 +227,7 @@ function insertMany_(name, objs) {
 /** Updates fields of the record whose first column equals id. */
 function update_(name, id, patch) {
   markWritten_(name, name === 'Settings' ? [id] : null);
+  if (name === 'Customers') bumpCustEdits_(); // phones then fetch the whole customer list again
   var headers = SCHEMA[name];
   var list = _rowsCache[name];
   var rec = null;

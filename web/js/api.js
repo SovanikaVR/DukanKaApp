@@ -1,4 +1,5 @@
 /* Talks to the shop's own Apps Script web app. */
+import { idbAll, idbPut, idbDel, idbClear } from './store.js';
 
 const KEY_API = 'dk_api';
 const KEY_TOKEN = 'dk_token';
@@ -31,7 +32,7 @@ export class ApiError extends Error {}
 const READS = new Set(['ping', 'bootstrap', 'settings.images', 'rates.list', 'customers.search', 'customers.get', 'sale.list', 'sale.get',
   'oldgold.list', 'loans.list', 'loans.get', 'orders.list', 'orders.get', 'repairs.list', 'stock.list', 'stock.summary', 'stock.photo',
   'melt.list', 'fine.summary', 'parties.list', 'parties.ledger', 'cash.list', 'reports.daily', 'reports.month',
-  'reports.position', 'users.list', 'dues.list', 'home.summary', 'auth.login', 'auth.logout']);
+  'reports.position', 'users.list', 'dues.list', 'home.summary', 'auth.login', 'auth.logout', 'customers.sync']);
 
 let pendingRid = null;
 let lost = null;
@@ -60,55 +61,97 @@ async function post(target, payload, ms) {
  * without a CORS pre-flight (Apps Script does not answer OPTIONS requests).
  * Saves carry a request id, so trying again after a slow or broken connection never saves twice.
  */
-/* ---------- Instant screens: answers to reads are kept on the phone ----------
- * A screen opened again shows the saved answer at once, while the fresh one is fetched in the background.
- * If the fresh answer is different, 'dk-fresh' is sent and the screen redraws itself. Any save clears this. */
-const NO_KEEP = new Set(['ping', 'auth.login', 'auth.logout', 'bootstrap', 'settings.images', 'export.list', 'sale.export', 'stock.photo']);
-const KEEP_MS = 30 * 60 * 1000;
+/* ---------- Instant screens: answers are kept on the phone and updated in the background ----------
+ * Every list / screen answer is kept in the phone's storage (IndexedDB) for a day. Opening a screen shows the kept
+ * answer at once and asks the shop for the fresh one in the background; if it changed, 'dk-fresh' redraws the screen.
+ * After a save, kept answers are NOT thrown away: they are marked old and still shown at once (with "Updating…"),
+ * except for a few seconds right after the save — the screen you go to after saving always waits for fresh data,
+ * so a payment never shows the old baki. Pull down on a list (or the ↻ button) to fetch fresh data now. */
+const NO_KEEP = new Set(['ping', 'auth.login', 'auth.logout', 'bootstrap', 'settings.images', 'export.list', 'sale.export', 'stock.photo', 'customers.sync']);
+const KEEP_MS = 24 * 3600 * 1000;
+const MAX_KEPT = 200;
 const kept = new Map();
 const keepKey = (action, data) => token().slice(-8) + '|' + action + '|' + JSON.stringify(data || {}); // per login: never shows one user's data to another
-(function loadKept() {
-  try {
-    const all = JSON.parse(localStorage.getItem('dk_kept') || '[]');
-    all.forEach(([k, v]) => { if (Date.now() - v.t < KEEP_MS) kept.set(k, v); });
-  } catch (e) { /* ignore */ }
+let freshUntil = 0; // reads before this time wait for the shop (right after a save, or pull-to-refresh)
+let busyBg = 0;
+const syncEvent = () => document.dispatchEvent(new CustomEvent('dk-sync', { detail: busyBg }));
+
+const keptReady = (async () => {
+  try { localStorage.removeItem('dk_kept'); } catch (e) { /* old versions kept answers here */ }
+  const all = await idbAll('kept');
+  const now = Date.now();
+  all.sort((a, b) => b[1].t - a[1].t).forEach(([k, v], i) => {
+    if (now - v.t < KEEP_MS && i < MAX_KEPT) kept.set(k, v); else idbDel('kept', k);
+  });
 })();
-let saveTimer = null;
-function persistKept() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      const all = [...kept.entries()].sort((a, b) => b[1].t - a[1].t).slice(0, 40);
-      localStorage.setItem('dk_kept', JSON.stringify(all));
-    } catch (e) { try { localStorage.removeItem('dk_kept'); } catch (x) { /* ignore */ } }
-  }, 500);
+
+function keep(key, s) {
+  const v = { t: Date.now(), s };
+  kept.set(key, v);
+  idbPut('kept', key, v);
+  if (kept.size > MAX_KEPT) {
+    const oldest = [...kept.entries()].sort((a, b) => a[1].t - b[1].t)[0];
+    if (oldest) { kept.delete(oldest[0]); idbDel('kept', oldest[0]); }
+  }
 }
-/** After logging out (or being logged out) nothing of the shop stays on this phone: saved screens, recent customers, pictures. */
+
+/** After logging out (or being logged out) nothing of the shop stays on this phone: saved screens, customer list, pictures. */
 export function wipeLocal() {
   try {
     Object.keys(localStorage).forEach((k) => { if (/^dk_/.test(k) && !['dk_api', 'dk_lang', 'dk_paper', 'dk_thermal', 'dk_token'].includes(k)) localStorage.removeItem(k); });
   } catch (e) { /* ignore */ }
   kept.clear();
+  idbClear('kept'); idbClear('cust');
 }
 
-export function forgetKept() { kept.clear(); try { localStorage.removeItem('dk_kept'); } catch (e) { /* ignore */ } }
+export function forgetKept() { kept.clear(); idbClear('kept'); }
+
+/** Pull-to-refresh: the next screen reads wait for fresh data from the shop. */
+export function refreshNow() { freshUntil = Date.now() + 6000; }
+
+/** Is a fresh-enough answer for this read already on the phone? (used by the background pre-load) */
+export function haveFresh(action, data, maxAgeMs) {
+  const hit = kept.get(keepKey(action, data));
+  return !!hit && Date.now() - hit.t < maxAgeMs && !hit.old;
+}
 
 export async function call(action, data = {}, url) {
   if (!url && READS.has(action) && !NO_KEEP.has(action) && token()) {
+    await keptReady;
     const key = keepKey(action, data);
     const hit = kept.get(key);
     const fresh = () => callNet(action, data).then((d) => {
       const s = JSON.stringify(d);
-      if (s.length < 300000) { kept.set(key, { t: Date.now(), s }); persistKept(); }
+      if (s.length < 600000) keep(key, s);
       return { d, changed: !hit || hit.s !== s };
     });
-    if (hit && Date.now() - hit.t < KEEP_MS) {
-      fresh().then((r) => { if (r.changed) document.dispatchEvent(new CustomEvent('dk-fresh', { detail: action })); }).catch(() => {});
+    if (hit && Date.now() - hit.t < KEEP_MS && Date.now() > freshUntil) {
+      busyBg++; syncEvent();
+      fresh().then((r) => { if (r.changed) document.dispatchEvent(new CustomEvent('dk-fresh', { detail: action })); })
+        .catch(() => {}).finally(() => { busyBg--; syncEvent(); });
       return JSON.parse(hit.s);
     }
-    return (await fresh()).d;
+    try { return (await fresh()).d; } catch (e) {
+      if (hit) return JSON.parse(hit.s); // no internet: the kept answer is better than nothing
+      throw e;
+    }
   }
   return callNet(action, data, url);
+}
+
+/** Loads answers into the phone in the background (one at a time), so the first tap on a screen is instant too. */
+export async function preload(list) {
+  await keptReady;
+  for (const [action, data] of list) {
+    if (!token() || haveFresh(action, data, 10 * 60 * 1000)) continue;
+    try {
+      busyBg++; syncEvent();
+      const d = await callNet(action, data);
+      const s = JSON.stringify(d);
+      if (s.length < 600000) keep(keepKey(action, data), s);
+    } catch (e) { break; } // offline or slow: try again next time
+    finally { busyBg--; syncEvent(); }
+  }
 }
 
 async function callNet(action, data = {}, url) {
@@ -148,7 +191,13 @@ async function callNet(action, data = {}, url) {
     throw new ApiError(body.error || 'Something went wrong');
   }
   if (isSave && lost && lost.sig === sig) lost = null;
-  if (isSave) forgetKept(); // something changed: screens read fresh data next time
+  if (isSave) {
+    // Something changed. Kept answers stay (shown at once, refreshed in the background), but for a few seconds
+    // every read waits for the shop: the screen opened right after a save always shows the new data.
+    kept.forEach((v) => { v.old = true; });
+    freshUntil = Date.now() + 6000;
+    document.dispatchEvent(new CustomEvent('dk-saved', { detail: action }));
+  }
   if (body.data && body.data._saved === true) throw new ApiError('This was already saved. Please open the list to see it.');
   return body.data;
 }
