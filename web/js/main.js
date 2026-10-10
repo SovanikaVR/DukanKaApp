@@ -37,6 +37,7 @@ const ROUTES = [
   ['cash', () => import('./screens/cash.js'), 'render'],
   ['reports', () => import('./screens/reports.js'), 'render'],
   ['settings', () => import('./screens/settings.js'), 'render'],
+  ['bill-design', () => import('./screens/billdesign.js'), 'render'],
   ['dues', () => import('./screens/dues.js'), 'render'],
   ['help', () => import('./screens/help.js'), 'index'],
   ['help/:topic', () => import('./screens/help.js'), 'topic']
@@ -154,7 +155,7 @@ window.addEventListener('unhandledrejection', (ev) => {
 const ACTIVE = {
   'bill/:id': 'bills', 'bills-export': 'bills', 'loan-new': 'loans', 'loan/:id': 'loans', 'order-new': 'orders', 'order/:id': 'orders',
   'repair-new': 'repairs', 'repair/:id': 'repairs', 'stock-add': 'stock', 'rate': 'home', 'search': 'home',
-  'customer/:id': 'home', 'customer-edit/:id': 'home', 'help/:topic': 'help'
+  'customer/:id': 'home', 'customer-edit/:id': 'home', 'help/:topic': 'help', 'bill-design': 'settings'
 };
 let currentParams = {};
 
@@ -197,7 +198,7 @@ window.addEventListener('hashchange', render);
 
 // A screen was shown from the phone's saved copy and fresher data just arrived: redraw it,
 // unless the user is typing in a form or a dialog is open.
-const FORM_ROUTES = new Set(['sale', 'loan-new', 'order-new', 'repair-new', 'stock-add', 'oldgold', 'customer-edit/:id', 'rate', 'settings', 'connect', 'login', 'bills-export']);
+const FORM_ROUTES = new Set(['sale', 'loan-new', 'order-new', 'repair-new', 'stock-add', 'oldgold', 'customer-edit/:id', 'rate', 'settings', 'bill-design', 'connect', 'login', 'bills-export']);
 let freshTimer = null;
 document.addEventListener('dk-fresh', () => {
   clearTimeout(freshTimer);

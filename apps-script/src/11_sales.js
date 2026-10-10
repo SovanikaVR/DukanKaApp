@@ -333,6 +333,7 @@ function billShop_(s, type) {
     terms: gst ? s.bill_terms : (s.quote_footer || s.bill_terms), title: gst ? 'TAX INVOICE' : (s.quote_title || 'QUOTATION'),
     lang: s.bill_lang || 'en', rateUnit: s.bill_rate_unit || '10g',
     template: s.bill_template || 'classic', color: s.bill_color || 'gold', ruleLine: s.bill_rule_line || '',
+    design: json_(gst ? s.bill_design_gst : (s.bill_design_quote || s.bill_design_gst), null), picRight: s.bill_pic_right || '',
     fields: json_(gst ? s.bill_fields_gst : s.bill_fields_quote, {})
   };
 }

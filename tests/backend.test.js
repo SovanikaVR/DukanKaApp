@@ -353,16 +353,17 @@ test('bills like the sample: making %, gross weight, own bill no, note, print op
   assert.ok(!ok('export.list', { module: 'stock', status: 'all' }, E).columns.includes('Our cost ₹'));
 });
 
-test('live market rate: world price × ₹ × market difference, city adjustment', () => {
-  const L = ok('rates.live', {}, T);
-  const world = 4183.4 * 96.83 / 31.1034768;
-  assert.strictEqual(Math.round(L.g24), Math.round(world * 1.09));
-  assert.strictEqual(L.per10.g24, Math.round(world * 1.09 * 10));
-  ok('settings.save', { live_city: 'Nanded', live_city_adjust: '500' }, T);
-  g.CacheService.getScriptCache().remove('live_rates');
-  const L2 = ok('rates.live', {}, T);
-  assert.strictEqual(L2.city, 'Nanded');
-  assert.strictEqual(L2.per10.g24, Math.round((world * 1.09 + 50) * 10));
+test('bill designer: design saved per bill type and sent with the bill', () => {
+  assert.ok(/not valid/.test(call('settings.save', { bill_design_gst: '{bad' }, T).error));
+  const D = { layout: 'invoice', main: '#7a1f2b', cols: ['sr', 'desc', 'net', 'amount'] };
+  ok('settings.save', { bill_design_gst: JSON.stringify(D), shop_city: 'Nanded' }, T);
+  const sale = { type: 'EST', customerId: ok('customers.search', { q: '' }, T).results[0].id,
+    lines: [{ name: 'Ring', metal: 'gold', purityPct: 91.6, weight: 1, rate: 14000, makingPerG: 0 }], oldGold: [], cash: 14000, upi: 0, udhaar: 0 };
+  const b = ok('sale.create', sale, T);
+  assert.strictEqual(b.shop.design.layout, 'invoice'); // quotation uses the GST design until it has its own
+  ok('settings.save', { bill_design_quote: JSON.stringify({ layout: 'book' }) }, T);
+  assert.strictEqual(ok('sale.get', { id: b.id }, T).shop.design.layout, 'book');
+  ok('sale.void', { id: b.id }, T);
 });
 
 test('data health check finds a repeated id', () => {

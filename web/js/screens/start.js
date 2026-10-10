@@ -91,7 +91,7 @@ export async function home() {
       h('a', { class: 'search-box', href: '#/search' }, icon('search'), h('span', null, t('Search name, surname, mobile…')))),
     h('main', { class: 'body' },
       rateStrip,
-      modOn('liverate') ? liveCard() : null,
+      modOn('liverate') ? liveButton() : null,
       h('div', { class: 'tiles' }, tiles.map(([, path, ic, label]) =>
         h('a', { class: 'tile', href: '#/' + path }, icon(ic, 28), h('span', { class: 'tile-label' }, t(label))))),
       more.length ? h('div', { class: 'pills' }, more.map(([, path, label]) => h('a', { class: 'pill', href: '#/' + path }, t(label)))) : null,
@@ -125,53 +125,16 @@ async function loadAttention(box) {
   }
 }
 
-/* ---------- Live market rate card (Settings → Modules → Live market rate to hide) ---------- */
-/** Link to the city page on All India Bullion (their terms allow sharing links; copying their rates is not allowed). */
-function aibLink(city) {
+/* ---------- Live rate button: opens All India Bullion for the shop's city (Settings → Modules to hide) ---------- */
+export function aibUrl() {
   const slug = (x) => String(x || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  const st = slug(setting('shop_state', '')), ct = slug(city || setting('live_city', ''));
-  const url = 'https://allindiabullion.com/gold-rate' + (st && ct ? '/' + st + '/' + ct : '');
-  return h('a', { class: 'link small', href: url, target: '_blank', rel: 'noopener' }, t('Compare on All India Bullion') + ' ↗');
+  const st = slug(setting('shop_state', '')), ct = slug(setting('shop_city', ''));
+  return 'https://allindiabullion.com/gold-rate' + (st ? '/' + st + (ct ? '/' + ct : '') : '');
 }
-
-function liveCard() {
-  const box = h('div', { class: 'card live-card' }, h('div', { class: 'sec gold' }, t('Market rate (live)')), h('div', { class: 'hint' }, t('Loading…')));
-  call('rates.live').then((L) => {
-    const at = L.at ? new Date(L.at) : null;
-    const time = at && !isNaN(at) ? at.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '';
-    const today = S.rate && S.rate.isToday ? S.rate : null;
-    const match = async () => {
-      // Sets the city difference so the live rate matches the shop's own 24K rate today.
-      const world = (L.g24 - L.cityAdjust10g / 10) / (1 + L.dutyPct / 100);
-      const pct = Math.round((today.g24 / world - 1) * 10000) / 100;
-      await busy(null, async () => {
-        const data = { live_premium_pct: String(pct), live_city_adjust: '0' };
-        if (today.silver && L.silver) {
-          const worldAg = L.silver / (1 + L.silverPct / 100);
-          data.live_silver_pct = String(Math.round((today.silver / worldAg - 1) * 10000) / 100);
-        }
-        await call('settings.save', data);
-        await refresh();
-        toast(t('Live rate now follows your city rate'));
-        go('home');
-      });
-    };
-    box.replaceChildren(
-      h('div', { class: 'kv' }, h('span', { class: 'sec gold' }, t('Market rate (live)') + (L.city ? ' · ' + L.city : '')), h('span', { class: 'hint' }, time)),
-      h('div', { class: 'rate-vals' }, h('span', null, '24K ' + inr(L.per10.g24)), h('span', null, '22K ' + inr(L.per10.g22)), h('span', null, 'Ag ' + inr(L.silverKg) + '/kg')),
-      h('div', { class: 'hint' }, t('per 10 g · approximate, from the world price; your local sarafa rate may differ a little')),
-      aibLink(L.city),
-      isViewer() ? null : h('div', { class: 'row-actions' },
-        h('a', { class: 'btn2 small', href: '#/rate?g24=' + L.g24 + '&g22=' + L.g22 + '&g18=' + L.g18 + '&ag=' + L.silver }, t('Use as today\'s rate')),
-        today && S.user.role === 'owner' && Math.abs(today.g24 - L.g24) / today.g24 > 0.002 ? h('button', { class: 'btn2 small', onclick: match }, t('Match my city rate')) : null));
-  }).catch((e) => {
-    const perm = /NEED_PERMISSION|UrlFetchApp|external_request|permission/i.test(e.message || '');
-    const msg = perm
-      ? (S.user.role === 'owner'
-        ? t('Live rate needs one Google permission. Open your Google Sheet → menu DukanKaApp → "Allow permissions" → Allow. Then in Apps Script: Deploy → Manage deployments → Edit → New version → Deploy.')
-        : t('Live rate is not switched on yet. Please ask the owner.'))
-      : t('Live rate not available right now. Try again later.');
-    box.replaceChildren(h('div', { class: 'sec gold' }, t('Market rate (live)')), h('div', { class: 'hint' }, msg));
-  });
-  return box;
+function liveButton() {
+  const city = setting('shop_city', '');
+  return h('a', { class: 'card live-btn', href: aibUrl(), target: '_blank', rel: 'noopener' },
+    h('span', { class: 'live-dot' }),
+    h('span', { class: 'grow' }, h('b', null, t('Live gold & silver rate')), h('div', { class: 'hint' }, (city ? city + ' · ' : '') + 'All India Bullion')),
+    h('span', { class: 'link' }, '↗'));
 }

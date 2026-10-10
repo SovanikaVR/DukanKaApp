@@ -7,7 +7,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.6.0';
+var APP_VERSION = '1.7.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -50,6 +50,7 @@ var DEFAULT_SETTINGS = {
   shop_mobile: '',
   shop_gstin: '',
   shop_state: '',
+  shop_city: '',
   gst_enabled: 'true',
   gst_default_pct: '3',
   hsn_code: '7113',
@@ -68,6 +69,9 @@ var DEFAULT_SETTINGS = {
   bill_lang: 'en',
   bill_template: 'classic',
   bill_color: 'gold',
+  bill_design_gst: '',
+  bill_design_quote: '',
+  bill_pic_right: '',
   bill_rule_line: '',
   bill_rule_pct: '',
   bill_rate_unit: '10g',
@@ -91,11 +95,6 @@ var DEFAULT_SETTINGS = {
   cash_opening: '0',
   cash_opening_date: '',
   report_email: '',
-  live_city: '',
-  live_premium_pct: '9',
-  live_silver_pct: '',
-  live_city_adjust: '0',
-  live_goldapi_key: '',
   modules: JSON.stringify({
     girvi: true, sale: true, oldgold: true, orders: true, repair: true, stock: true,
     melt: true, wholesaler: true, karigar: true, cash: true, reports: true

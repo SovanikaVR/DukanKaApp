@@ -10,7 +10,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.6.0';
+var APP_VERSION = '1.7.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -53,6 +53,7 @@ var DEFAULT_SETTINGS = {
   shop_mobile: '',
   shop_gstin: '',
   shop_state: '',
+  shop_city: '',
   gst_enabled: 'true',
   gst_default_pct: '3',
   hsn_code: '7113',
@@ -71,6 +72,9 @@ var DEFAULT_SETTINGS = {
   bill_lang: 'en',
   bill_template: 'classic',
   bill_color: 'gold',
+  bill_design_gst: '',
+  bill_design_quote: '',
+  bill_pic_right: '',
   bill_rule_line: '',
   bill_rule_pct: '',
   bill_rate_unit: '10g',
@@ -94,11 +98,6 @@ var DEFAULT_SETTINGS = {
   cash_opening: '0',
   cash_opening_date: '',
   report_email: '',
-  live_city: '',
-  live_premium_pct: '9',
-  live_silver_pct: '',
-  live_city_adjust: '0',
-  live_goldapi_key: '',
   modules: JSON.stringify({
     girvi: true, sale: true, oldgold: true, orders: true, repair: true, stock: true,
     melt: true, wholesaler: true, karigar: true, cash: true, reports: true
@@ -680,7 +679,6 @@ var ROUTES = {
   'repairs.edit': function (u, d) { return repairEdit_(u, d); },
   'cash.void': function (u, d) { return cashVoid_(u, d); },
   'home.summary': function () { return homeSummary_(); },
-  'rates.live': function () { return liveRates_(); },
   'admin.check': function () { return checkData_(); },
   'sale.print': function (u, d) { return salePrint_(u, d); },
   'sale.export': function (u, d) { return saleExport_(d); },
@@ -694,7 +692,7 @@ var READ_ONLY = {
   'sale.get': 1, 'oldgold.list': 1, 'loans.list': 1, 'loans.get': 1, 'orders.list': 1, 'orders.get': 1,
   'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'melt.list': 1, 'fine.summary': 1,
   'parties.list': 1, 'parties.ledger': 1, 'cash.list': 1, 'reports.daily': 1, 'reports.month': 1,
-  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1, 'rates.live': 1, 'admin.check': 1, 'sale.export': 1, 'export.list': 1
+  'reports.position': 1, 'users.list': 1, 'dues.list': 1, 'home.summary': 1, 'admin.check': 1, 'sale.export': 1, 'export.list': 1
 };
 
 function handle_(action, token, data) {
@@ -768,7 +766,7 @@ function bumpDataVersion_() {
   try { CacheService.getScriptCache().put('dataver', String(Date.now()) + Math.random().toString(36).slice(2, 6), 21600); } catch (e) { /* ignore */ }
 }
 
-var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1, 'admin.check': 1, 'rates.live': 1 };
+var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1, 'admin.check': 1 };
 
 function cachedRead_(action, user, data, run) {
   if (NO_READ_CACHE[action]) return run();
@@ -810,7 +808,11 @@ function settingsSave_(user, d) {
       v = v.trim().toUpperCase();
       req_(/^[0-3][0-9][A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(v), 'GSTIN is not valid (15 characters, like 27ABCDE1234F1Z5)');
     }
-    if ((k === 'shop_logo' || k === 'quote_logo') && v) {
+    if ((k === 'bill_design_gst' || k === 'bill_design_quote') && v) {
+      req_(v.length < 8000, 'Bill design is too big');
+      try { req_(typeof JSON.parse(v) === 'object', 'Bill design is not valid'); } catch (e) { throw new Error('Bill design is not valid'); }
+    }
+    if ((k === 'shop_logo' || k === 'quote_logo' || k === 'bill_pic_right') && v) {
       req_(/^data:image\/(png|jpeg|webp);base64,/.test(v), 'Logo should be a picture');
       req_(v.length < 45000, 'Logo picture is too big — use a smaller one');
     }
@@ -1361,6 +1363,7 @@ function billShop_(s, type) {
     terms: gst ? s.bill_terms : (s.quote_footer || s.bill_terms), title: gst ? 'TAX INVOICE' : (s.quote_title || 'QUOTATION'),
     lang: s.bill_lang || 'en', rateUnit: s.bill_rate_unit || '10g',
     template: s.bill_template || 'classic', color: s.bill_color || 'gold', ruleLine: s.bill_rule_line || '',
+    design: json_(gst ? s.bill_design_gst : (s.bill_design_quote || s.bill_design_gst), null), picRight: s.bill_pic_right || '',
     fields: json_(gst ? s.bill_fields_gst : s.bill_fields_quote, {})
   };
 }
@@ -2759,69 +2762,8 @@ function exportList_(user, d) {
   return out;
 }
 
-/* ===== 18_live.js ===== */
-/* ---------- Live market rate (shown on Home; the shop can hide it) ----------
- * Free sources, no key: world gold/silver price in US$ (api.gold-api.com) and US$ → ₹ (open.er-api.com).
- * Indian price ≈ world price × ₹ rate × (1 + import duty %), per gram. Cities differ a little (local
- * sarafa association, transport): the shop sets its city and a ± ₹ per 10 g difference once in Settings.
- * Optional: a GoldAPI.io key (free plan) gives the ₹ price directly.
- * Answers are kept for 15 minutes so the free services are called rarely.
- */
-var OZ_G = 31.1034768;
-
-function fetchJson_(url, headers) {
-  var res;
-  try {
-    res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: headers || {}, followRedirects: true });
-  } catch (e) {
-    // Google has not been allowed to reach the internet yet (new permission after an update).
-    req_(!/permission|external_request|authoriz/i.test(String(e && e.message)), 'NEED_PERMISSION: Open the Google Sheet → Extensions → Apps Script → choose "allowPermissions" at the top → Run → Allow. Then Deploy → Manage deployments → Edit → New version → Deploy.');
-    throw e;
-  }
-  req_(res.getResponseCode() === 200, 'Live rate service did not answer (' + res.getResponseCode() + ')');
-  return JSON.parse(res.getContentText());
-}
-
-function liveRates_() {
-  var s = settings_();
-  var cache = CacheService.getScriptCache();
-  var hit = cache.get('live_rates');
-  var base = hit ? JSON.parse(hit) : null;
-  if (!base) {
-    var g24, ag, source, at = nowIso_();
-    if (s.live_goldapi_key) {
-      var hdr = { 'x-access-token': s.live_goldapi_key };
-      var gj = fetchJson_('https://www.goldapi.io/api/XAU/INR', hdr);
-      var sj = fetchJson_('https://www.goldapi.io/api/XAG/INR', hdr);
-      g24 = num_(gj.price_gram_24k); ag = num_(sj.price_gram_24k) || num_(sj.price) / OZ_G;
-      source = 'GoldAPI.io';
-    } else {
-      var xau = fetchJson_('https://api.gold-api.com/price/XAU');
-      var xag = fetchJson_('https://api.gold-api.com/price/XAG');
-      var fx = fetchJson_('https://open.er-api.com/v6/latest/USD');
-      var inr = num_(fx && fx.rates && fx.rates.INR);
-      req_(inr > 0 && num_(xau.price) > 0, 'Live rate not available right now');
-      g24 = num_(xau.price) * inr / OZ_G; ag = num_(xag.price) * inr / OZ_G;
-      source = 'gold-api.com + open.er-api.com';
-      at = xau.updatedAt || at;
-    }
-    base = { g24World: round2_(g24), agWorld: round2_(ag), source: source, at: at };
-    try { cache.put('live_rates', JSON.stringify(base), 900); } catch (e) { /* ignore */ }
-  }
-  // India price = world price + market difference % (import duty, GST, local premium; the shop can match it to its own city once).
-  var duty = s.live_premium_pct === '' || s.live_premium_pct === undefined ? 9 : num_(s.live_premium_pct);
-  var adj10 = num_(s.live_city_adjust);
-  var g24g = base.g24World * (s.live_goldapi_key ? 1 : 1 + duty / 100) + adj10 / 10;
-  var p22 = num_(s.purity_22k) || 91.6, p18 = num_(s.purity_18k) || 75;
-  var sDuty = s.live_silver_pct === '' || s.live_silver_pct === undefined ? duty : num_(s.live_silver_pct);
-  var agg = base.agWorld * (s.live_goldapi_key ? 1 : 1 + sDuty / 100);
-  return {
-    city: s.live_city || '', source: base.source, at: base.at, dutyPct: duty, silverPct: sDuty, cityAdjust10g: adj10,
-    g24: Math.round(g24g * 100) / 100, g22: Math.round(g24g * p22) / 100, g18: Math.round(g24g * p18) / 100, silver: Math.round(agg * 100) / 100,
-    per10: { g24: Math.round(g24g * 10), g22: Math.round(g24g * p22 / 10), g18: Math.round(g24g * p18 / 10) }, silverKg: Math.round(agg * 1000)
-  };
-}
-
+/* ===== 19_permissions.js ===== */
+/* Permissions helper (sheet menu → Allow permissions). */
 /** Run this once from the Apps Script editor (or the sheet menu) after an update that needs new Google permissions. */
 function allowPermissions() {
   UrlFetchApp.fetch('https://api.gold-api.com/price/XAU', { muteHttpExceptions: true });

@@ -17,7 +17,11 @@ function settingsSave_(user, d) {
       v = v.trim().toUpperCase();
       req_(/^[0-3][0-9][A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(v), 'GSTIN is not valid (15 characters, like 27ABCDE1234F1Z5)');
     }
-    if ((k === 'shop_logo' || k === 'quote_logo') && v) {
+    if ((k === 'bill_design_gst' || k === 'bill_design_quote') && v) {
+      req_(v.length < 8000, 'Bill design is too big');
+      try { req_(typeof JSON.parse(v) === 'object', 'Bill design is not valid'); } catch (e) { throw new Error('Bill design is not valid'); }
+    }
+    if ((k === 'shop_logo' || k === 'quote_logo' || k === 'bill_pic_right') && v) {
       req_(/^data:image\/(png|jpeg|webp);base64,/.test(v), 'Logo should be a picture');
       req_(v.length < 45000, 'Logo picture is too big — use a smaller one');
     }
