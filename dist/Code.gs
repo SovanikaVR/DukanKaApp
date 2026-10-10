@@ -10,7 +10,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.5.1';
+var APP_VERSION = '1.6.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -69,6 +69,10 @@ var DEFAULT_SETTINGS = {
   quote_logo: '',
   quote_footer: '',
   bill_lang: 'en',
+  bill_template: 'classic',
+  bill_color: 'gold',
+  bill_rule_line: '',
+  bill_rule_pct: '',
   bill_rate_unit: '10g',
   bill_fields_gst: JSON.stringify({ billNo: true, gross: true, net: true, purity: true, purityInName: false, hsn: true, huid: false,
     rate: true, making: true, makingAmt: false, metalValue: false, words: true, payment: true, oldGold: true, sign: true }),
@@ -810,6 +814,10 @@ function settingsSave_(user, d) {
       req_(/^data:image\/(png|jpeg|webp);base64,/.test(v), 'Logo should be a picture');
       req_(v.length < 45000, 'Logo picture is too big — use a smaller one');
     }
+    if (k === 'bill_template') req_(['classic', 'modern', 'simple', 'royal'].indexOf(v) >= 0, 'Pick a bill design');
+    if (k === 'bill_color') req_(['gold', 'maroon', 'blue', 'green', 'black'].indexOf(v) >= 0, 'Pick a bill colour');
+    if (k === 'bill_rule_line') v = v.trim().slice(0, 200);
+    if (k === 'bill_rule_pct' && v.trim() !== '') { var rp = parseFloat(v); req_(!isNaN(rp) && rp >= 0 && rp <= 100, 'Cut % should be 0 to 100'); v = String(rp); }
     if (k === 'making_default_pct' && v !== '') { var mp = parseFloat(v); req_(!isNaN(mp) && mp >= 0 && mp <= 100, 'Making % should be 0 to 100'); }
     if (NUM[k]) {
       var n = parseFloat(String(v).replace(/,/g, ''));
@@ -1158,7 +1166,7 @@ function saleCreate_(user, d) {
   } else {
     billNo = type + '/' + fy + '/' + String(nextCounter_(type + '_' + fy)).padStart(4, '0');
   }
-  var printOpts = d.printOpts && typeof d.printOpts === 'object' ? d.printOpts : {};
+  var printOpts = cleanPrintOpts_(d.printOpts);
   var notes = String(d.notes || '').trim().slice(0, 500);
   var id = uid_('S');
   var bill = {
@@ -1352,8 +1360,25 @@ function billShop_(s, type) {
     gstin: s.shop_gstin, state: s.shop_state, hsn: s.hsn_code, bis: s.bis_licence,
     terms: gst ? s.bill_terms : (s.quote_footer || s.bill_terms), title: gst ? 'TAX INVOICE' : (s.quote_title || 'QUOTATION'),
     lang: s.bill_lang || 'en', rateUnit: s.bill_rate_unit || '10g',
+    template: s.bill_template || 'classic', color: s.bill_color || 'gold', ruleLine: s.bill_rule_line || '',
     fields: json_(gst ? s.bill_fields_gst : s.bill_fields_quote, {})
   };
+}
+
+/** What to print on one bill: true/false per field, plus the cut % for the shop's rule line. */
+function cleanPrintOpts_(o) {
+  var out = {};
+  if (!o || typeof o !== 'object') return out;
+  Object.keys(o).forEach(function (k) {
+    if (k === 'rulePct') {
+      var v = String(o[k] === null || o[k] === undefined ? '' : o[k]).trim();
+      if (v === '') return;
+      var n = parseFloat(v);
+      req_(!isNaN(n) && n >= 0 && n <= 100, 'Cut % on the bill should be 0 to 100');
+      out.rulePct = String(n);
+    } else if (/^[a-zA-Z]{1,20}$/.test(k)) out[k] = !!o[k];
+  });
+  return out;
 }
 
 /** Change what is printed on one bill (show / hide fields, note). Money is never changed here. */
@@ -1361,7 +1386,7 @@ function salePrint_(user, d) {
   var b = find_('Sales', d.id);
   req_(b, 'Bill not found');
   var patch = {};
-  if (d.printOpts && typeof d.printOpts === 'object') patch.printOpts = d.printOpts;
+  if (d.printOpts && typeof d.printOpts === 'object') patch.printOpts = cleanPrintOpts_(d.printOpts);
   if (d.notes !== undefined) patch.notes = String(d.notes || '').trim().slice(0, 500);
   update_('Sales', b.id, patch);
   audit_(user, 'sale.print', b.id, patch);

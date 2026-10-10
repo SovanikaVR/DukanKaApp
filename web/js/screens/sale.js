@@ -4,7 +4,7 @@ import { S, setting, list, purityFor, rateFor } from '../state.js';
 import { h, screen, field, card, grid, seg, busy, toast, num, inr, g3, sec, go, remember, modal, icon } from '../ui.js';
 import { customerPicker } from '../picker.js';
 import { t } from '../i18n.js';
-import { FIELD_LABELS } from '../bill.js';
+import { FIELD_LABELS, ruleLineText } from '../bill.js';
 
 const KARATS = [{ value: '24K', label: '24K' }, { value: '22K', label: '22K' }, { value: '18K', label: '18K' }, { value: 'Silver', label: 'Ag' }];
 
@@ -20,6 +20,14 @@ export async function render(params, query) {
   const billNo = field(t('Bill number (blank = next number)'), { value: '' });
   const billDate = field(t('Bill date'), { type: 'date', value: S.today });
   let printOpts = {};
+  // Shop rule line printed on every bill (Settings → Bill design), e.g. "मोडताना ___% घट": the % is typed here.
+  const ruleText = setting('bill_rule_line', '');
+  const rulePct = field(t('Cut % for the shop rule line'), { type: 'num', value: setting('bill_rule_pct', '') });
+  const ruleHint = h('div', { class: 'hint' });
+  const showRule = () => { ruleHint.textContent = t('On the bill') + ': ' + ruleLineText(ruleText, rulePct.input.value); };
+  rulePct.input.addEventListener('input', showRule);
+  showRule();
+  const ruleBox = ruleText ? h('div', { class: 'card stack' }, rulePct, ruleHint) : null;
   const optsBox = h('div', { class: 'chips wrap' });
   function drawOpts() {
     let def = {};
@@ -94,7 +102,8 @@ export async function render(params, query) {
     const who = picker.get();
     const payload = Object.assign({}, who, {
       type, gstPct: gstPct.input.value, notes: note.input.value.trim(), billNo: billNo.input.value.trim(),
-      date: billDate.input.value || S.today, printOpts,
+      date: billDate.input.value || S.today,
+      printOpts: Object.assign({}, printOpts, ruleText ? { rulePct: rulePct.input.value.trim() } : {}),
       lines: lines.map((l) => l.get()), oldGold: olds.map((o) => o.get()),
       cash: last.net >= 0 ? num(cash.input.value) : num(cash.input.value),
       upi: num(upi.input.value), udhaar: last.net >= 0 ? num(udhaar.input.value) : 0
@@ -122,7 +131,7 @@ export async function render(params, query) {
       gstRow,
       sec(t('Old gold taken in') + ' · ' + t('right here, no separate entry')), oldBox,
       h('button', { class: 'add gold', type: 'button', onclick: addOld }, '+ Add old gold / silver'),
-      totalsBox, payNote, grid(3, cash, upi, udhaar), details,
+      totalsBox, payNote, grid(3, cash, upi, udhaar), ruleBox, details,
       h('div', { class: 'hint' }, t('Items typed by hand do not change stock. To sell a stock item, use "From stock".')),
       h('div', { class: 'hint' }, 'UPI fills itself with the rest. Put any unpaid amount in Baki — it shows in the Baki list until paid.')],
     [h('div', { class: 'kv foot-total' }, totalLabel, totalValue), save]);

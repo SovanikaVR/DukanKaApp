@@ -30,16 +30,42 @@ const L = {
     cancelled: 'रद्द', for: '', cash: 'नकद', upi: 'UPI', baki: 'बाकी' }
 };
 
+/** Bill colours (Settings → Bill design). */
+export const BILL_COLORS = {
+  gold: { label: 'Gold', b: '#6b4a1f', hb: '#fbf6ea', a: '#5a3a12', tx: '#3b2a14', th: '#efe4c8', st: '#f6efdc', ln: '#c9b48a' },
+  maroon: { label: 'Maroon', b: '#7a1f2b', hb: '#fbeff0', a: '#6d1422', tx: '#3a0f15', th: '#f2d9dc', st: '#f8e8ea', ln: '#d9a9b0' },
+  blue: { label: 'Blue', b: '#1F3A5F', hb: '#eef3f9', a: '#1F3A5F', tx: '#1a2a3d', th: '#dde7f2', st: '#eaf0f7', ln: '#9fb4cc' },
+  green: { label: 'Green', b: '#23573a', hb: '#eef6f0', a: '#1d4d31', tx: '#15301f', th: '#d8eadf', st: '#e7f2ea', ln: '#9cc4ab' },
+  black: { label: 'Black', b: '#222222', hb: '#ffffff', a: '#000000', tx: '#111111', th: '#eeeeee', st: '#f3f3f3', ln: '#999999' }
+};
+export const BILL_TEMPLATES = [['classic', 'Classic'], ['modern', 'Modern'], ['simple', 'Simple (saves ink)'], ['royal', 'Royal']];
+function billLook(shop) {
+  const c = BILL_COLORS[shop.color] || BILL_COLORS.gold;
+  const tpl = BILL_TEMPLATES.some(([k]) => k === shop.template) ? shop.template : 'classic';
+  return { cls: 't-' + tpl, style: `--b:${c.b};--hb:${c.hb};--a:${c.a};--tx:${c.tx};--th:${c.th};--st:${c.st};--ln:${c.ln}` };
+}
+
+/** The shop's fixed line printed on every bill, e.g. "मोडताना ___% घट". ___ or -- is filled with the % typed on the bill;
+ * left blank on the bill → a gap stays for writing by hand. */
+export function ruleLineText(text, pct) {
+  text = String(text || '').trim();
+  if (!text) return '';
+  const has = /_{2,}|-{2,}/.test(text);
+  const v = String(pct ?? '').trim();
+  const fill = v !== '' ? v : '____';
+  return has ? text.replace(/_{2,}|-{2,}/, fill) : (v !== '' ? text + ' ' + v + '%' : text);
+}
+
 /** Fields shown on this bill: shop defaults (Settings) changed by the choices saved on the bill. */
 export function billFields(b) {
   const base = { billNo: true, gross: true, net: true, purity: b.type === 'GST', purityInName: false, hsn: b.type === 'GST', huid: false,
-    rate: true, making: true, makingAmt: false, metalValue: false, words: b.type === 'GST', payment: true, oldGold: true, sign: true };
+    rate: true, making: true, makingAmt: false, metalValue: false, words: b.type === 'GST', payment: true, oldGold: true, sign: true, ruleLine: true };
   return Object.assign(base, (b.shop && b.shop.fields) || {}, b.printOpts || {});
 }
 export const FIELD_LABELS = [
   ['billNo', 'Bill number'], ['gross', 'Gross weight'], ['net', 'Net weight'], ['purity', 'Purity column'], ['purityInName', 'Purity after item name'],
   ['hsn', 'HSN'], ['huid', 'HUID'], ['rate', 'Rate'], ['making', 'Making (₹/g or %)'], ['makingAmt', 'Making amount'], ['metalValue', 'Metal value'],
-  ['words', 'Amount in words'], ['payment', 'Cash / UPI / baki'], ['oldGold', 'Old gold details'], ['sign', 'Signature']
+  ['words', 'Amount in words'], ['payment', 'Cash / UPI / baki'], ['oldGold', 'Old gold details'], ['sign', 'Signature'], ['ruleLine', 'Shop rule line (cut %)']
 ];
 
 const mkLabel = (l, t) => (l.makingType === 'pct' ? (+l.makingPct || 0) + '%' : l.makingType === 'fixed' ? m2(l.making)
@@ -104,7 +130,9 @@ function invoicePaper(b, paper) {
   const olds = f.oldGold ? b.oldGold.map((g) => sumRow(`${t.lessOld} ${esc(g.item)} — ${g3(g.weight)} g, ${t.cut} ${esc(g.cutPct)}%, ${t.fine} ${g3(g.customerFine)} g × ${m0(g.rate)}`, '−' + m2(g.amount))).join('')
     : (b.oldValue ? sumRow(t.lessOld, '−' + m2(b.oldValue)) : '');
   const pay = [b.cash ? t.cash + ' ' + m0(b.cash) : '', b.upi ? t.upi + ' ' + m0(b.upi) : '', b.udhaar ? t.baki + ' ' + m0(b.udhaar) : ''].filter(Boolean).join(' · ');
-  return `<div class="doc bill ${paper}">
+  const look = billLook(shop);
+  const rule = f.ruleLine ? ruleLineText(shop.ruleLine, b.printOpts && b.printOpts.rulePct) : '';
+  return `<div class="doc bill ${paper} ${look.cls}" style="${look.style}">
   ${head(b, t, f)}
   ${custRow(b, t, f)}
   <table class="items"><thead><tr>${cols.map((c) => `<th class="${c[3]}">${c[1]}</th>`).join('')}</tr></thead>
@@ -120,6 +148,7 @@ function invoicePaper(b, paper) {
   ${f.payment && pay ? `<div class="pay">${t.paid}: ${pay}</div>` : ''}
   ${f.words ? `<div class="words"><b>${t.words}:</b> Rupees ${Calc.inWords(Math.abs(b.net))} only</div>` : ''}
   ${b.notes ? `<div class="note"><b>${t.note}:</b> ${esc(b.notes)}</div>` : ''}
+  ${rule ? `<div class="rule">${esc(rule)}</div>` : ''}
   ${b.status === 'void' ? `<div class="void">${t.cancelled}</div>` : ''}
   ${f.sign ? `<div class="signs"><span>${t.custSign}</span><span>${t.for ? t.for + ' ' : ''}${esc(shop.name)}<br><br>${t.sign}</span></div>` : ''}
   ${shop.terms ? `<div class="terms">${esc(shop.terms).replace(/\n/g, '<br>')}</div>` : ''}
@@ -162,6 +191,7 @@ function invoiceThermal(b, mm) {
   ${b.oldValue ? '<div class="hr"></div>' + r(b.net >= 0 ? t.netPay : t.paidToCust, m0(Math.abs(b.net)), 'b big') : ''}
   ${f.payment ? (b.cash ? r(t.cash, m0(b.cash)) : '') + (b.upi ? r(t.upi, m0(b.upi)) : '') + (b.udhaar ? r(t.baki, m0(b.udhaar)) : '') : ''}
   ${b.notes ? `<div class="hr"></div><div>${t.note}: ${esc(b.notes)}</div>` : ''}
+  ${f.ruleLine && shop.ruleLine ? `<div class="hr"></div><div class="c b">${esc(ruleLineText(shop.ruleLine, b.printOpts && b.printOpts.rulePct))}</div>` : ''}
   ${b.status === 'void' ? `<div class="c b">*** ${t.cancelled} ***</div>` : ''}
   ${shop.terms ? `<div class="hr"></div><div class="c sm">${esc(shop.terms)}</div>` : ''}
 </div>`;
@@ -214,19 +244,40 @@ const DOC_CSS = `.listdoc{font-family:'IBM Plex Sans','Noto Sans Devanagari',Ari
 .doc.th{font-family:'IBM Plex Mono','Courier New',monospace;font-size:11.5px;line-height:1.4;box-sizing:border-box}
 .doc.bill{font-family:'IBM Plex Sans','IBM Plex Sans Devanagari','Noto Sans Devanagari',Arial,sans-serif;color:#111;background:#fff;box-sizing:border-box;display:flex;flex-direction:column;gap:8px}
 .doc.bill.a4{width:190mm;padding:7mm;font-size:12.5px}.doc.bill.a5{width:138mm;padding:5mm;font-size:10.5px}
-.bill .bh{display:flex;gap:10px;align-items:center;border:1.5px solid #6b4a1f;border-radius:6px;padding:8px 10px;background:#fbf6ea}
+.bill .bh{display:flex;gap:10px;align-items:center;border:1.5px solid var(--b);border-radius:6px;padding:8px 10px;background:var(--hb)}
 .bill .logo{width:64px;height:64px;object-fit:contain}.bill.a5 .logo{width:48px;height:48px}
-.bill .bh-mid{flex:1;text-align:center}.bill .bh-shop{font-size:2em;font-weight:700;color:#5a3a12;line-height:1.15}
-.bill .bh-tag,.bill .bh-addr{font-size:.95em;color:#3b2a14}.bill .bh-right{text-align:right;font-size:.9em;line-height:1.35;min-width:28%}
-.bill .bh-title{font-weight:700;letter-spacing:.06em;font-size:1.05em;color:#5a3a12}
+.bill .bh-mid{flex:1;text-align:center}.bill .bh-shop{font-size:2em;font-weight:700;color:var(--a);line-height:1.15}
+.bill .bh-tag,.bill .bh-addr{font-size:.95em;color:var(--tx)}.bill .bh-right{text-align:right;font-size:.9em;line-height:1.35;min-width:28%}
+.bill .bh-title{font-weight:700;letter-spacing:.06em;font-size:1.05em;color:var(--a)}
 .bill .cust{display:flex;flex-direction:column;gap:4px}.bill .crow{display:flex;gap:14px}
-.bill .fill{border-bottom:1px dotted #555;padding:0 2px 2px;white-space:nowrap}.bill .fill.grow{flex:1;white-space:normal}.bill .lb{color:#5a3a12}
-.bill table.items{width:100%;border-collapse:collapse}.bill th,.bill td{border:1px solid #6b4a1f;padding:4px 5px;vertical-align:top}
-.bill th{background:#efe4c8;font-size:.9em;font-weight:700;color:#3b2a14}.bill .n{text-align:right;white-space:nowrap}.bill .c{text-align:center}
+.bill .fill{border-bottom:1px dotted #555;padding:0 2px 2px;white-space:nowrap}.bill .fill.grow{flex:1;white-space:normal}.bill .lb{color:var(--a)}
+.bill table.items{width:100%;border-collapse:collapse}.bill th,.bill td{border:1px solid var(--b);padding:4px 5px;vertical-align:top}
+.bill th{background:var(--th);font-size:.9em;font-weight:700;color:var(--tx)}.bill .n{text-align:right;white-space:nowrap}.bill .c{text-align:center}
 .bill .sm{font-size:.85em;color:#555}.bill tr.filler td{height:60px}.bill.a5 tr.filler td{height:36px}
-.bill tfoot td{border-top:1px solid #6b4a1f}.bill td.lbl{color:#3b2a14}.bill tr.strong td{font-weight:700;background:#f6efdc}
+.bill tfoot td{border-top:1px solid var(--b)}.bill td.lbl{color:var(--tx)}.bill tr.strong td{font-weight:700;background:var(--st)}
 .bill .pay,.bill .words,.bill .note{font-size:.95em}.bill .signs{display:flex;justify-content:space-between;margin-top:22px;font-size:.95em}
-.bill .signs span:last-child{text-align:center}.bill .terms{font-size:.8em;color:#3b2a14;border-top:1px solid #c9b48a;padding-top:4px}
+.bill .signs span:last-child{text-align:center}.bill .terms{font-size:.8em;color:var(--tx);border-top:1px solid var(--ln);padding-top:4px}
+.bill .rule{font-size:1em;font-weight:600;color:var(--a);border:1px dashed var(--b);border-radius:4px;padding:4px 8px;text-align:center}
+.bill .bh .logo.big{width:84px;height:84px}
+/* Template: Modern — coloured band on top, light table */
+.bill.t-modern .bh{background:var(--a);border-color:var(--a);border-radius:0;color:#fff}
+.bill.t-modern .bh-shop,.bill.t-modern .bh-title,.bill.t-modern .bh-tag,.bill.t-modern .bh-addr{color:#fff}
+.bill.t-modern .bh .logo{background:#fff;border-radius:6px;padding:3px}
+.bill.t-modern th{background:var(--a);color:#fff;border-color:var(--a)}
+.bill.t-modern td{border-color:var(--ln);border-left:0;border-right:0}
+.bill.t-modern tr.strong td{background:var(--th)}
+/* Template: Simple — black and white, saves ink */
+.bill.t-simple .bh{background:#fff;border:0;border-bottom:2px solid #111;border-radius:0;padding:4px 0 8px}
+.bill.t-simple .bh-shop,.bill.t-simple .bh-title,.bill.t-simple .lb,.bill.t-simple .rule{color:#111}
+.bill.t-simple th{background:#fff;color:#111;border:0;border-bottom:1.5px solid #111;border-top:1.5px solid #111}
+.bill.t-simple td{border:0;border-bottom:1px solid #ccc}.bill.t-simple tr.strong td{background:#fff;border-top:1.5px solid #111}
+.bill.t-simple .rule{border-color:#111}
+/* Template: Royal — double frame, name in the centre */
+.bill.t-royal{border:4px double var(--b);border-radius:4px}
+.bill.t-royal .bh{flex-direction:column;text-align:center;background:var(--hb);border:0;border-bottom:2px solid var(--b);border-radius:0}
+.bill.t-royal .bh-right{text-align:center;min-width:0;display:flex;flex-wrap:wrap;justify-content:center;gap:2px 14px}
+.bill.t-royal .bh-title{width:100%;border-top:1px solid var(--ln);border-bottom:1px solid var(--ln);padding:2px 0;margin:2px 0}
+.bill.t-royal .bh-shop{font-family:Georgia,'Noto Serif Devanagari',serif;letter-spacing:.02em}
 .th .sm{font-size:.9em}
 
 .th58{width:54mm;padding:2mm}.th80{width:76mm;padding:2mm;font-size:12.5px}

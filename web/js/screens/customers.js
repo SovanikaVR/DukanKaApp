@@ -4,6 +4,7 @@ import { modOn, isViewer } from '../state.js';
 import { h, screen, field, card, grid, busy, toast, inr, fdate, g3, icon, empty, go, sec, ask, miniLoading } from '../ui.js';
 import { t } from '../i18n.js';
 import { exportCsvButton } from './exports.js';
+import { rememberCustomer, recentCustomers, rememberWords, recentWords, forgetRecent } from '../recent.js';
 
 export async function search(params, query) {
   let village = query.v || '';
@@ -16,14 +17,37 @@ export async function search(params, query) {
   let timer;
   q.input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 250); });
 
+  // Keep the search in the address, so Back from a customer brings the same search and results again.
+  const keepInUrl = () => {
+    const v = q.input.value.trim();
+    const qs = [v ? 'q=' + encodeURIComponent(v) : '', village ? 'v=' + encodeURIComponent(village) : ''].filter(Boolean).join('&');
+    try { history.replaceState(history.state, '', '#/search' + (qs ? '?' + qs : '')); } catch (e) { /* ignore */ }
+  };
+  const recentBox = h('div');
+  const drawRecent = () => {
+    const words = recentWords(), cust = recentCustomers();
+    if (q.input.value.trim() || (!words.length && !cust.length)) { recentBox.replaceChildren(); return; }
+    recentBox.replaceChildren(
+      h('div', { class: 'kv' }, sec(t('Recent searches')),
+        h('button', { type: 'button', class: 'link', onclick: () => { forgetRecent(); drawRecent(); } }, t('Clear'))),
+      words.length ? h('div', { class: 'chips' }, ...words.map((w) => h('button', { type: 'button', class: 'chip', onclick: () => { q.input.value = w; run(); } }, w))) : null,
+      ...cust.map((c) => h('a', { class: 'row-card', href: '#/customer/' + c.id },
+        h('div', { class: 'kv' }, h('b', null, c.name), h('span', { class: 'muted' }, c.mobile)),
+        c.village ? h('div', { class: 'muted' }, c.village) : null)),
+      sec(t('All customers')));
+  };
+
   async function run() {
+    keepInUrl();
+    drawRecent();
     try {
       const r = await call('customers.search', { q: q.input.value.trim(), village });
       villages.replaceChildren(
         h('button', { class: 'chip' + (village ? '' : ' on'), onclick: () => { village = ''; run(); } }, 'All'),
         ...r.villages.map((v) => h('button', { class: 'chip' + (v === village ? ' on' : ''), onclick: () => { village = v; run(); } }, v)));
       count.textContent = r.total + ' found' + (r.results[0] && r.results[0].matched ? ' · matched on ' + r.results[0].matched : '');
-      list.replaceChildren(...(r.results.length ? r.results.map((c) => h('a', { class: 'row-card', href: '#/customer/' + c.id },
+      list.replaceChildren(...(r.results.length ? r.results.map((c) => h('a', { class: 'row-card', href: '#/customer/' + c.id,
+        onclick: () => { rememberWords(q.input.value); rememberCustomer(c); } },
         h('div', { class: 'kv' }, h('b', null, c.name), h('span', { class: 'muted' }, c.mobile)),
         h('div', { class: 'muted' }, c.village || ''),
         h('div', { class: 'tags' },
@@ -33,13 +57,14 @@ export async function search(params, query) {
     } catch (e) { list.replaceChildren(h('div', { class: 'error-box' }, e.message)); }
   }
   run();
-  return screen('Find customer', null, [q, sec(t('Village')), villages, count, list],
+  return screen('Find customer', null, [q, recentBox, sec(t('Village')), villages, count, list],
     isViewer() ? null : h('a', { class: 'btn2', href: '#/customer-edit/new' }, '+ ' + t('New customer')), { right: exportCsvButton('customers', () => ({})) });
 }
 
 export async function profile({ id }) {
   const d = await call('customers.get', { id });
   const c = d.customer;
+  rememberCustomer({ id: c.id, name: d.name, mobile: c.mobile, village: c.village });
   const pre = `c=${c.id}&cn=${encodeURIComponent(d.name)}&cv=${encodeURIComponent(c.village)}&cm=${c.mobile}`;
   const wa = c.mobile ? 'https://wa.me/91' + c.mobile : null;
   const header = h('div', { class: 'stat-row' },

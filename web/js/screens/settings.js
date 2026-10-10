@@ -2,7 +2,7 @@
 import { call, apiUrl } from '../api.js';
 import { S, isOwner, refresh, modules } from '../state.js';
 import { h, screen, field, card, grid, seg, busy, toast, sec, go, ask, num } from '../ui.js';
-import { FIELD_LABELS, invoiceHtml, docCss } from '../bill.js';
+import { FIELD_LABELS, invoiceHtml, docCss, BILL_TEMPLATES, BILL_COLORS } from '../bill.js';
 import { getLang, setLang, t } from '../i18n.js';
 
 const FORMULAS = [
@@ -54,6 +54,16 @@ export async function render() {
   const quoteHead = [bf('quote_title', 'Title (e.g. QUOTATION / कोटेशन)'), bf('quote_shop_name', 'Shop name on quotation (blank = same as GST bill)'),
     bf('quote_tagline', 'Line under the name'), bf('quote_address', 'Address'), bf('quote_phones', 'Phone numbers (one per line)', 'textarea'),
     bf('quote_footer', 'Note printed at the bottom (e.g. मोडतांना मजुरी व …% घट)', 'textarea')];
+  // Bill look: design (template) + colour + the shop's fixed rule line with a % filled on each bill.
+  const ruleFields = [bf('bill_rule_line', 'Shop rule line on every bill — write ___ where the % goes (e.g. मोडताना ___% घट)'),
+    bf('bill_rule_pct', 'Usual % for that line (blank = type on each bill)', 'num')];
+  let billTpl = s.bill_template || 'classic', billColor = s.bill_color || 'gold';
+  const tplSeg = seg(BILL_TEMPLATES.map(([value, label]) => ({ value, label: t(label) })), billTpl, (v) => { billTpl = v; preview(); });
+  const colorBox = h('div', { class: 'chips wrap' });
+  const drawColors = () => colorBox.replaceChildren(...Object.entries(BILL_COLORS).map(([k, c]) => h('button', {
+    type: 'button', class: 'chip swatch' + (k === billColor ? ' on' : ''), onclick: () => { billColor = k; drawColors(); preview(); }
+  }, h('span', { class: 'dot', style: 'background:' + c.a }), t(c.label))));
+  drawColors();
   let billLang = s.bill_lang || 'en', rateUnit = s.bill_rate_unit || '10g', mkType = s.making_default_type || 'perg', rcm = s.oldgold_rcm === 'true';
   const langSeg = seg([{ value: 'en', label: 'English' }, { value: 'mr', label: 'मराठी' }, { value: 'hi', label: 'हिंदी' }], billLang, (v) => { billLang = v; preview(); });
   const unitSeg = seg([{ value: '10g', label: 'Rate per 10 g' }, { value: 'g', label: 'Rate per gram' }], rateUnit, (v) => { rateUnit = v; preview(); });
@@ -107,9 +117,11 @@ export async function render() {
         phones: gst ? val('shop_phones') : qv('phones'), mobile: val('shop_mobile'), gstin: val('shop_gstin'), bis: val('bis_licence'), hsn: val('hsn_code'),
         logo: gst ? (logos.shop_logo ?? s.shop_logo) : ((logos.quote_logo ?? s.quote_logo) || (val('quote_shop_name') ? '' : (logos.shop_logo ?? s.shop_logo))),
         terms: gst ? val('bill_terms') : (val('quote_footer') || val('bill_terms')), title: val('quote_title') || 'QUOTATION',
-        lang: billLang, rateUnit, fields: (gst ? gstFields : quoteFields).state
+        lang: billLang, rateUnit, fields: (gst ? gstFields : quoteFields).state,
+        template: billTpl, color: billColor, ruleLine: val('bill_rule_line')
       }
     };
+    sample.printOpts = { rulePct: val('bill_rule_pct') };
     const p = prevBox.firstChild;
     p.innerHTML = `<style>${docCss()}</style>` + invoiceHtml(sample, 'a4');
     requestAnimationFrame(() => {
@@ -118,7 +130,7 @@ export async function render() {
       if (avail > 0 && p.scrollWidth > avail) p.style.zoom = String(avail / p.scrollWidth);
     });
   }
-  [...gstHead, ...quoteHead].forEach((x) => x.input.addEventListener('input', preview));
+  [...gstHead, ...quoteHead, ...ruleFields].forEach((x) => x.input.addEventListener('input', preview));
   setTimeout(preview, 0);
 
   const mods = modules();
@@ -151,8 +163,8 @@ export async function render() {
 
   const save = h('button', { class: 'btn', onclick: () => busy(save, async () => {
     const data = {};
-    [...shop, ...std, ...gstHead, ...quoteHead, mkPct, ...silver, ...live].forEach((el) => { data[el.key] = el.input.value.trim(); });
-    Object.assign(data, { bill_lang: billLang, bill_rate_unit: rateUnit, making_default_type: mkType, oldgold_rcm: rcm ? 'true' : 'false',
+    [...shop, ...std, ...gstHead, ...quoteHead, ...ruleFields, mkPct, ...silver, ...live].forEach((el) => { data[el.key] = el.input.value.trim(); });
+    Object.assign(data, { bill_template: billTpl, bill_color: billColor, bill_lang: billLang, bill_rate_unit: rateUnit, making_default_type: mkType, oldgold_rcm: rcm ? 'true' : 'false',
       bill_fields_gst: JSON.stringify(gstFields.state), bill_fields_quote: JSON.stringify(quoteFields.state) });
     ['shop_logo', 'quote_logo'].forEach((k) => { if (logos[k] !== undefined) data[k] = logos[k]; });
     data.gst_enabled = gstOn ? 'true' : 'false';
@@ -200,11 +212,16 @@ export async function render() {
   return screen(t('Settings'), 'Owner only', [
     sec('SHOP DETAILS · printed on every bill'), card(shop[0], shop[1], grid(2, shop[2], shop[4]), shop[3], gstSeg, shop[5]),
     sec('BILL DESIGN'),
+    card(h('div', { class: 'f' }, h('span', { class: 'lbl' }, t('Bill design')), tplSeg),
+      h('div', { class: 'f' }, h('span', { class: 'lbl' }, t('Bill colour')), colorBox),
+      h('div', { class: 'hint' }, t('Logo: add the shop logo picture below. See the preview at the bottom.'))),
     card(h('div', { class: 'f' }, h('span', { class: 'lbl' }, t('Bill language')), langSeg), unitSeg,
       h('div', { class: 'sec' }, t('GST BILL · top of the bill')), gstHead, logoPick('shop_logo', t('Shop logo (picture)')),
       h('div', { class: 'sec' }, t('Show on GST bills')), gstFields),
     card(h('div', { class: 'sec' }, t('QUOTATION (non-GST) · top of the bill')), quoteHead, logoPick('quote_logo', t('Quotation logo (blank = shop logo)')),
       h('div', { class: 'sec' }, t('Show on quotations')), quoteFields),
+    card(h('div', { class: 'sec' }, t('RULE LINE · printed on every bill')), ...ruleFields,
+      h('div', { class: 'hint' }, t('The % is asked on every new bill (prefilled with the usual %). Left blank, a gap is printed to write by hand.'))),
     card(h('div', { class: 'sec' }, t('PREVIEW')), prevSeg, prevBox,
       h('div', { class: 'hint' }, t('Each bill can still hide or show fields from its own screen.'))),
     sec('STANDARD VALUES · prefilled, always editable on each entry'), card(grid(2, ...std.slice(0, 10)), std[10]),

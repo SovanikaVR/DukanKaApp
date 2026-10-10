@@ -2,6 +2,7 @@
 import { call } from './api.js';
 import { h, field, icon, grid } from './ui.js';
 import { t } from './i18n.js';
+import { rememberCustomer, recentCustomers } from './recent.js';
 
 export function customerPicker(query = {}) {
   let chosen = query.c ? { id: query.c, name: query.cn || '', village: query.cv || '', mobile: query.cm || '' } : null;
@@ -36,7 +37,7 @@ export function customerPicker(query = {}) {
   async function search() {
     const v = q.input.value.trim();
     const my = ++seq;
-    if (v.length < 2) { results.replaceChildren(v ? newBtn : null); return; }
+    if (v.length < 2) { results.replaceChildren(...(v ? [] : recentButtons()), v ? newBtn : null); return; }
     try {
       const r = await call('customers.search', { q: v });
       if (my !== seq) return; // a newer search is running: ignore this older answer
@@ -49,8 +50,19 @@ export function customerPicker(query = {}) {
     }
   }
 
+  // Empty box: show the customers used last on this phone (search history is kept).
+  function recentButtons() {
+    const list = recentCustomers().slice(0, 5);
+    if (!list.length) return [];
+    return [h('div', { class: 'hint' }, t('Recent customers')),
+      ...list.map((c) => h('button', { type: 'button', class: 'pick-item', onclick: () => pick(c) },
+        h('b', null, c.name), h('span', null, [c.village, c.mobile].filter(Boolean).join(' · '))))];
+  }
+  q.input.addEventListener('focus', () => { if (!q.input.value.trim()) search(); });
+
   function pick(c) {
     chosen = c;
+    rememberCustomer(c);
     draw();
     box.dispatchEvent(new CustomEvent('picked', { detail: c }));
   }

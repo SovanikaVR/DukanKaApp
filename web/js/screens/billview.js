@@ -34,12 +34,15 @@ export async function render({ id }, query) {
     } }, t(label));
     return c;
   }));
+  // Shop rule line (e.g. "मोडताना ___% घट"): the % for this bill.
+  const rulePct = field(t('Cut % for the shop rule line'), { type: 'num', value: (b.printOpts && b.printOpts.rulePct) || '' });
+  rulePct.input.addEventListener('input', () => { b.printOpts = Object.assign({}, b.printOpts, { rulePct: rulePct.input.value.trim() }); draw(); });
   const saveOpts = h('button', { class: 'btn2 small', onclick: () => busy(saveOpts, async () => {
     await call('sale.print', { id: b.id, printOpts: b.printOpts || {}, notes: note.input.value });
     toast('Saved');
   }) }, t('Save print choices'));
   const printCard = isViewer() ? null : h('details', { class: 'card fold' }, h('summary', null, t('What to print on this bill')),
-    h('div', { class: 'stack' }, toggles, note, saveOpts,
+    h('div', { class: 'stack' }, toggles, note, b.shop && b.shop.ruleLine ? rulePct : null, saveOpts,
       h('div', { class: 'hint' }, t('Default choices for every bill are in Settings → Bill design.'))));
   const actions = docActions((s) => invoiceHtml(b, s), {
     filename: b.billNo.replace(/\//g, '-') + '.pdf', text: billText(b), mobile: b.mobile

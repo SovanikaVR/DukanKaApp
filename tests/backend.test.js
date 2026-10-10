@@ -75,6 +75,22 @@ test('GST bill needs GSTIN, then matches the design numbers', () => {
   assert.ok(call('sale.create', Object.assign({}, sale, { type: 'EST', cash: 1, upi: 1 }), T).error.indexOf('add up') > 0);
 });
 
+test('bill design, colour and shop rule line with % per bill', () => {
+  assert.ok(/design/.test(call('settings.save', { bill_template: 'fancy' }, T).error));
+  assert.ok(/0 to 100/.test(call('settings.save', { bill_rule_pct: '150' }, T).error));
+  ok('settings.save', { bill_template: 'royal', bill_color: 'maroon', bill_rule_line: 'मोडताना ___% घट', bill_rule_pct: '10' }, T);
+  const sale = { type: 'EST', customerId: ganesh.id, lines: [{ name: 'Ring', metal: 'gold', purityPct: 91.6, weight: 1, rate: 14000, makingPerG: 0 }],
+    oldGold: [], cash: 14000, upi: 0, udhaar: 0, printOpts: { rulePct: '8', rate: false } };
+  const b = ok('sale.create', sale, T);
+  assert.strictEqual(b.printOpts.rulePct, '8');
+  assert.strictEqual(b.printOpts.rate, false);
+  assert.strictEqual(b.shop.template, 'royal');
+  assert.strictEqual(b.shop.color, 'maroon');
+  assert.strictEqual(b.shop.ruleLine, 'मोडताना ___% घट');
+  assert.ok(/0 to 100/.test(call('sale.create', Object.assign({}, sale, { printOpts: { rulePct: '-3' } }), T).error));
+  ok('sale.void', { id: b.id }, T);
+});
+
 let loan;
 test('girvi: day-wise interest, part payment, close', () => {
   loan = ok('loans.create', { customerId: ramesh.id, item: 'Gold chain', metal: 'gold', purityPct: 91.6,

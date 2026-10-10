@@ -7,7 +7,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.5.1';
+var APP_VERSION = '1.6.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -66,6 +66,10 @@ var DEFAULT_SETTINGS = {
   quote_logo: '',
   quote_footer: '',
   bill_lang: 'en',
+  bill_template: 'classic',
+  bill_color: 'gold',
+  bill_rule_line: '',
+  bill_rule_pct: '',
   bill_rate_unit: '10g',
   bill_fields_gst: JSON.stringify({ billNo: true, gross: true, net: true, purity: true, purityInName: false, hsn: true, huid: false,
     rate: true, making: true, makingAmt: false, metalValue: false, words: true, payment: true, oldGold: true, sign: true }),

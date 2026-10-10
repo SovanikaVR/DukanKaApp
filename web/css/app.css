@@ -290,3 +290,5 @@ button.help-btn { background: transparent; border: 0; padding: 0; cursor: pointe
   color: var(--navy); border-radius: 9px; background: #EEF2F6; overflow: hidden; }
 .date-native { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
 .date-native::-webkit-calendar-picker-indicator { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.chip.swatch { display: inline-flex; align-items: center; gap: 6px; }
+.chip.swatch .dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,.15); }

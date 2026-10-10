@@ -21,6 +21,10 @@ function settingsSave_(user, d) {
       req_(/^data:image\/(png|jpeg|webp);base64,/.test(v), 'Logo should be a picture');
       req_(v.length < 45000, 'Logo picture is too big — use a smaller one');
     }
+    if (k === 'bill_template') req_(['classic', 'modern', 'simple', 'royal'].indexOf(v) >= 0, 'Pick a bill design');
+    if (k === 'bill_color') req_(['gold', 'maroon', 'blue', 'green', 'black'].indexOf(v) >= 0, 'Pick a bill colour');
+    if (k === 'bill_rule_line') v = v.trim().slice(0, 200);
+    if (k === 'bill_rule_pct' && v.trim() !== '') { var rp = parseFloat(v); req_(!isNaN(rp) && rp >= 0 && rp <= 100, 'Cut % should be 0 to 100'); v = String(rp); }
     if (k === 'making_default_pct' && v !== '') { var mp = parseFloat(v); req_(!isNaN(mp) && mp >= 0 && mp <= 100, 'Making % should be 0 to 100'); }
     if (NUM[k]) {
       var n = parseFloat(String(v).replace(/,/g, ''));

@@ -1,6 +1,6 @@
 /* First-run connect, login, and home. */
 import { call, apiUrl, token } from '../api.js';
-import { S, refresh, modOn, isViewer, clearCached } from '../state.js';
+import { S, refresh, modOn, isViewer, clearCached, setting } from '../state.js';
 import { h, field, busy, toast, icon, inr, fdate, go } from '../ui.js';
 import { t, getLang, setLang } from '../i18n.js';
 
@@ -126,6 +126,14 @@ async function loadAttention(box) {
 }
 
 /* ---------- Live market rate card (Settings → Modules → Live market rate to hide) ---------- */
+/** Link to the city page on All India Bullion (their terms allow sharing links; copying their rates is not allowed). */
+function aibLink(city) {
+  const slug = (x) => String(x || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const st = slug(setting('shop_state', '')), ct = slug(city || setting('live_city', ''));
+  const url = 'https://allindiabullion.com/gold-rate' + (st && ct ? '/' + st + '/' + ct : '');
+  return h('a', { class: 'link small', href: url, target: '_blank', rel: 'noopener' }, t('Compare on All India Bullion') + ' ↗');
+}
+
 function liveCard() {
   const box = h('div', { class: 'card live-card' }, h('div', { class: 'sec gold' }, t('Market rate (live)')), h('div', { class: 'hint' }, t('Loading…')));
   call('rates.live').then((L) => {
@@ -152,6 +160,7 @@ function liveCard() {
       h('div', { class: 'kv' }, h('span', { class: 'sec gold' }, t('Market rate (live)') + (L.city ? ' · ' + L.city : '')), h('span', { class: 'hint' }, time)),
       h('div', { class: 'rate-vals' }, h('span', null, '24K ' + inr(L.per10.g24)), h('span', null, '22K ' + inr(L.per10.g22)), h('span', null, 'Ag ' + inr(L.silverKg) + '/kg')),
       h('div', { class: 'hint' }, t('per 10 g · approximate, from the world price; your local sarafa rate may differ a little')),
+      aibLink(L.city),
       isViewer() ? null : h('div', { class: 'row-actions' },
         h('a', { class: 'btn2 small', href: '#/rate?g24=' + L.g24 + '&g22=' + L.g22 + '&g18=' + L.g18 + '&ag=' + L.silver }, t('Use as today\'s rate')),
         today && S.user.role === 'owner' && Math.abs(today.g24 - L.g24) / today.g24 > 0.002 ? h('button', { class: 'btn2 small', onclick: match }, t('Match my city rate')) : null));

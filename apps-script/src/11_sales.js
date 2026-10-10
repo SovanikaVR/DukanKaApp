@@ -138,7 +138,7 @@ function saleCreate_(user, d) {
   } else {
     billNo = type + '/' + fy + '/' + String(nextCounter_(type + '_' + fy)).padStart(4, '0');
   }
-  var printOpts = d.printOpts && typeof d.printOpts === 'object' ? d.printOpts : {};
+  var printOpts = cleanPrintOpts_(d.printOpts);
   var notes = String(d.notes || '').trim().slice(0, 500);
   var id = uid_('S');
   var bill = {
@@ -332,8 +332,25 @@ function billShop_(s, type) {
     gstin: s.shop_gstin, state: s.shop_state, hsn: s.hsn_code, bis: s.bis_licence,
     terms: gst ? s.bill_terms : (s.quote_footer || s.bill_terms), title: gst ? 'TAX INVOICE' : (s.quote_title || 'QUOTATION'),
     lang: s.bill_lang || 'en', rateUnit: s.bill_rate_unit || '10g',
+    template: s.bill_template || 'classic', color: s.bill_color || 'gold', ruleLine: s.bill_rule_line || '',
     fields: json_(gst ? s.bill_fields_gst : s.bill_fields_quote, {})
   };
+}
+
+/** What to print on one bill: true/false per field, plus the cut % for the shop's rule line. */
+function cleanPrintOpts_(o) {
+  var out = {};
+  if (!o || typeof o !== 'object') return out;
+  Object.keys(o).forEach(function (k) {
+    if (k === 'rulePct') {
+      var v = String(o[k] === null || o[k] === undefined ? '' : o[k]).trim();
+      if (v === '') return;
+      var n = parseFloat(v);
+      req_(!isNaN(n) && n >= 0 && n <= 100, 'Cut % on the bill should be 0 to 100');
+      out.rulePct = String(n);
+    } else if (/^[a-zA-Z]{1,20}$/.test(k)) out[k] = !!o[k];
+  });
+  return out;
 }
 
 /** Change what is printed on one bill (show / hide fields, note). Money is never changed here. */
@@ -341,7 +358,7 @@ function salePrint_(user, d) {
   var b = find_('Sales', d.id);
   req_(b, 'Bill not found');
   var patch = {};
-  if (d.printOpts && typeof d.printOpts === 'object') patch.printOpts = d.printOpts;
+  if (d.printOpts && typeof d.printOpts === 'object') patch.printOpts = cleanPrintOpts_(d.printOpts);
   if (d.notes !== undefined) patch.notes = String(d.notes || '').trim().slice(0, 500);
   update_('Sales', b.id, patch);
   audit_(user, 'sale.print', b.id, patch);
