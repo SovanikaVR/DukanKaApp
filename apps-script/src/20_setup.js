@@ -141,7 +141,7 @@ function resetOwnerPin() {
   if (uname.getSelectedButton() !== ui.Button.OK) return;
   var u = findUser_(uname.getResponseText());
   if (!u) { ui.alert('No such user'); return; }
-  var pin = ui.prompt('New PIN', '4 to 8 digits:', ui.ButtonSet.OK_CANCEL);
+  var pin = ui.prompt('New PIN', '6 to 8 digits:', ui.ButtonSet.OK_CANCEL);
   if (pin.getSelectedButton() !== ui.Button.OK) return;
   usersSave_({ username: 'sheet-menu' }, { id: u.id, pin: pin.getResponseText().trim(), active: true });
   ui.alert('PIN changed for ' + u.username);
@@ -182,6 +182,7 @@ function archiveFy_(user, fy) {
   if (keep.length) sh.getRange(2, 1, keep.length, headers.length).setValues(keep);
   if (last > keep.length + 1) sh.getRange(keep.length + 2, 1, last - keep.length - 1, headers.length).clearContent();
   delete _rowsCache.Sales;
+  markWritten_('Sales');
   if (!oldId) setSetting_('archive_' + fy, arch.getId());
   audit_(user, 'archive', fy, { bills: move.length, file: arch.getId() });
   return { moved: move.length, fileUrl: arch.getUrl() };

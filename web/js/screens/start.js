@@ -1,5 +1,5 @@
 /* First-run connect, login, and home. */
-import { call, apiUrl, token } from '../api.js';
+import { call, apiUrl, token, wipeLocal } from '../api.js';
 import { S, refresh, modOn, isViewer, clearCached, setting } from '../state.js';
 import { h, field, busy, toast, icon, inr, fdate, go } from '../ui.js';
 import { t, getLang, setLang } from '../i18n.js';
@@ -106,6 +106,7 @@ async function logout() {
   token(null);
   S.user = null;
   clearCached();
+  wipeLocal();
   go('login');
 }
 

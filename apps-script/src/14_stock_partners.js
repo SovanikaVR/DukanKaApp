@@ -408,7 +408,8 @@ function cashBalanceBefore_(date, mode) {
   var bal = mode === 'cash' ? num_(s.cash_opening) : 0;
   // The opening amount is the drawer at the start of the opening date. Days before it are worked out backwards.
   var back = date < openDate;
-  rows_('Cash').forEach(function (c) {
+  // Only 5 of the 12 columns are needed for the running balance.
+  readCols_('Cash', ['date', 'dir', 'mode', 'amount', 'status']).forEach(function (c) {
     if (c.mode !== mode) return;
     var sign = c.dir === 'in' ? 1 : -1;
     if (back) { if (c.date >= date && c.date < openDate) bal -= sign * num_(c.amount); }
@@ -419,7 +420,7 @@ function cashBalanceBefore_(date, mode) {
 
 function cashList_(d) {
   var from = readDate_(d.from), to = d.to ? readDate_(d.to) : from;
-  var entries = rows_('Cash').filter(function (c) { return c.date >= from && c.date <= to; }).map(function (c) {
+  var entries = rowsMatching_('Cash', 'date', function (x) { return x >= from && x <= to; }).map(function (c) {
     return { id: c.id, date: c.date, dir: c.dir, mode: c.mode, amount: num_(c.amount), category: c.category,
       refType: c.refType, notes: c.notes, by: c.by, at: c.at };
   }).reverse();

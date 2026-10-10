@@ -41,7 +41,23 @@ function checkData_() {
   rows_('Sales').forEach(function (b) {
     try { JSON.parse(b.lines || '[]'); } catch (e) { problems.push('Sales row ' + b._row + ' (' + b.billNo + '): item lines are damaged'); }
   });
+  // Safety: the shop's sheet should not be open to everyone with the link, and should have few other editors.
+  var warnings = sharingWarnings_();
+  warnings.forEach(function (w) { problems.push(w); });
   return { ok: !problems.length, problems: problems.slice(0, 50), count: problems.length, checkedAt: nowIso_() };
+}
+
+function sharingWarnings_() {
+  var out = [];
+  try {
+    var file = DriveApp.getFileById(ss_().getId());
+    var access = String(file.getSharingAccess());
+    if (access === 'ANYONE' || access === 'ANYONE_WITH_LINK') out.push('SAFETY: the Google Sheet can be opened by anyone with its link. Open the sheet → Share → General access → Restricted.');
+    else if (access === 'DOMAIN' || access === 'DOMAIN_WITH_LINK') out.push('SAFETY: the Google Sheet is shared with a whole organisation. Set Share → General access → Restricted.');
+    var editors = file.getEditors().map(function (e) { return e.getEmail(); }).filter(Boolean);
+    if (editors.length) out.push('SAFETY: these Google accounts can change the sheet directly: ' + editors.join(', ') + '. Remove anyone who should not (Share).');
+  } catch (e) { /* no Drive access: skip */ }
+  return out;
 }
 
 /** Menu: Check my data. */

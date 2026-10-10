@@ -31,13 +31,19 @@ function duesList_(d) {
     if (r.due <= 0.5) return false;
     return !q || (r.customerName + ' ' + r.mobile).toLowerCase().indexOf(q) >= 0;
   });
-  list.forEach(function (r) {
-    var c = find_('Customers', r.customerId);
-    if (c) { r.customerName = customerName_(c); r.mobile = c.mobile; r.village = c.village; }
-    r.items = r.items.slice(-10).reverse();
-  });
   list.sort(function (a, b) { return a.since < b.since ? -1 : 1; });
-  return { list: list, total: Math.round(list.reduce(function (a, r) { return a + r.due; }, 0)), count: list.length };
+  var total = Math.round(list.reduce(function (a, r) { return a + r.due; }, 0)), count = list.length;
+  // A page at a time (oldest baki first): the phone gets a small answer even when hundreds of customers owe.
+  var limit = Math.min(Math.max(parseInt(d.limit, 10) || 100, 20), 1000);
+  list = list.slice(0, limit);
+  var names = {};
+  if (list.length > 3) readCols_('Customers', ['id', 'firstName', 'lastName', 'mobile', 'village']).forEach(function (c) { names[c.id] = c; });
+  list.forEach(function (r) {
+    var c = names[r.customerId] || (list.length <= 3 ? find_('Customers', r.customerId) : null);
+    if (c) { r.customerName = customerName_(c); r.mobile = c.mobile; r.village = c.village; }
+    r.items = r.items.slice(-6).reverse().map(function (x) { return { date: x.date, amount: x.amount, refType: x.refType, notes: x.notes }; });
+  });
+  return { list: list, total: total, count: count, more: count > list.length };
 }
 
 function duesPay_(user, d) {
@@ -179,16 +185,20 @@ function cashVoid_(user, d) {
 function homeSummary_() {
   var t = today_();
   var yearAgo = String(parseInt(t.slice(0, 4), 10) - 1) + t.slice(4);
-  var orders = rows_('Orders').filter(function (o) { return o.status !== 'delivered' && o.status !== 'cancelled'; });
-  var dues = duesList_({});
+  // Home only needs counts: a few columns of each tab, never whole tabs.
+  var orders = readCols_('Orders', ['status', 'deliveryDate']).filter(function (o) { return o.status !== 'delivered' && o.status !== 'cancelled'; });
+  var loans = readCols_('Loans', ['date', 'status']).filter(function (l) { return l.status === 'open'; });
+  var due = {};
+  readCols_('Dues', ['customerId', 'amount']).forEach(function (x) { due[x.customerId] = (due[x.customerId] || 0) + num_(x.amount); });
+  var owing = Object.keys(due).filter(function (k) { return round2_(due[k]) > 0.5; });
   return {
     ordersDueToday: orders.filter(function (o) { return o.deliveryDate === t; }).length,
     ordersLate: orders.filter(function (o) { return o.deliveryDate && o.deliveryDate < t; }).length,
-    loansOld: rows_('Loans').filter(function (l) { return l.status === 'open' && l.date <= yearAgo; }).length,
-    loansOpen: rows_('Loans').filter(function (l) { return l.status === 'open'; }).length,
+    loansOld: loans.filter(function (l) { return l.date <= yearAgo; }).length,
+    loansOpen: loans.length,
     ordersPending: orders.length,
-    repairsReady: rows_('Repairs').filter(function (r) { return r.status === 'ready'; }).length,
-    duesCount: dues.count, duesTotal: dues.total
+    repairsReady: readCols_('Repairs', ['status']).filter(function (r) { return r.status === 'ready'; }).length,
+    duesCount: owing.length, duesTotal: Math.round(owing.reduce(function (a, k) { return a + round2_(due[k]); }, 0))
   };
 }
 
@@ -217,6 +227,7 @@ function migrateDues_() {
   if (out.length) {
     var headers = SCHEMA.Dues;
     var sh = sheet_('Dues');
+    markWritten_('Dues');
     sh.getRange(sh.getLastRow() + 1, 1, out.length, headers.length)
       .setValues(out.map(function (o) { return headers.map(function (h) { return toCell_(o[h]); }); }));
     delete _rowsCache.Dues;

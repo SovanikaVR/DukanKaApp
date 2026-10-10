@@ -17,7 +17,7 @@ owner's own Google account:
 | --- | --- |
 | 1. Sheet | `SpreadsheetApp.create("<Shop> — DukanKaApp")`, first tab renamed **Setup**, plain-text key/value rows: `shop_name, shop_mobile, shop_city, owner_name, owner_username` (lowercase), `owner_salt` (`Utilities.getUuid()`), `owner_pinHash` (= `hashPin_` in `apps-script/src/03_auth.js`: SHA-256 of `salt + ':' + pin`, lowercase hex), `installed_by, installed_at`. The PIN itself is never stored. |
 | 2. Project | `POST https://script.googleapis.com/v1/projects` `{title, parentId: <spreadsheetId>}` (bound to the sheet) |
-| 3. Code | downloads `dist/Code.gs` + `dist/appsscript.json` from `raw.githubusercontent.com/SovanikaVR/DukanKaApp/main/dist/` (cached 30 min in the script cache — public code only), then `PUT /v1/projects/{id}/content` `{files:[{name:'Code',type:'SERVER_JS'},{name:'appsscript',type:'JSON'}]}` |
+| 3. Code | downloads `dist/Code.gs` + `dist/appsscript.json` from `raw.githubusercontent.com/SovanikaVR/DukanKaApp/stable/dist/` (cached 30 min in the script cache — public code only), then `PUT /v1/projects/{id}/content` `{files:[{name:'Code',type:'SERVER_JS'},{name:'appsscript',type:'JSON'}]}` |
 | 4. Version | `POST /v1/projects/{id}/versions` `{description}` |
 | 5. Deploy | `POST /v1/projects/{id}/deployments` `{versionNumber, manifestFileName:'appsscript', description}`; the URL is the `WEB_APP` entry point (fallback `https://script.google.com/macros/s/<deploymentId>/exec`) |
 | 6. Hand-over | appends `webapp_url` and `deployment_id` rows to the Setup tab |

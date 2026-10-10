@@ -7,19 +7,22 @@ const vm = require('vm');
 const fs = require('fs');
 const path = require('path');
 
+// Counts of Google service calls, so tests/perf.js can show what each screen costs on real Google.
+const OPS = { calls: 0, read: 0, written: 0, appends: 0, finds: 0, cache: 0, props: 0 };
 function makeSheet(name) {
   const sh = {
     name, data: [],
     getName: () => sh.name,
     setName: (n) => { sh.name = n; },
-    getLastRow: () => sh.data.length,
-    appendRow: (row) => { sh.data.push(row.map(String)); },
+    getLastRow: () => { OPS.calls++; return sh.data.length; },
+    appendRow: (row) => { OPS.calls++; OPS.appends++; OPS.written += row.length; sh.data.push(row.map(String)); },
     setFrozenRows: () => {},
     getRange: (r, c, nr, nc) => {
       if (typeof r === 'string') return {
         setNumberFormat: () => ({}),
         // Column A search like Google's TextFinder (used to look up one row by id).
         createTextFinder: (text) => ({ matchEntireCell() { return this; }, findNext: () => {
+          OPS.calls++; OPS.finds++;
           const i = sh.data.findIndex((row) => String(row[0]) === String(text));
           return i < 0 ? null : { getRow: () => i + 1 };
         } })
@@ -29,6 +32,7 @@ function makeSheet(name) {
         setNumberFormat: () => ({}),
         setFontWeight: () => ({}),
         getValues: () => {
+          OPS.calls++; OPS.read += nr * nc;
           const out = [];
           for (let i = 0; i < nr; i++) {
             const row = sh.data[r - 1 + i] || [];
@@ -39,6 +43,7 @@ function makeSheet(name) {
           return out;
         },
         setValues: (vals) => {
+          OPS.calls++; OPS.written += vals.length * (vals[0] ? vals[0].length : 0);
           vals.forEach((row, i) => {
             const idx = r - 1 + i;
             while (sh.data.length <= idx) sh.data.push([]);
@@ -127,12 +132,13 @@ function createContext(now) {
       return { getResponseCode: () => (body ? 200 : 404), getContentText: () => JSON.stringify(body || {}) };
     } },
     CacheService: { getScriptCache: () => ({
-      get: (k) => (k in cache ? cache[k] : null), put: (k, v) => { cache[k] = v; }, remove: (k) => { delete cache[k]; },
-      getAll: (ks) => { const o = {}; ks.forEach((k) => { if (k in cache) o[k] = cache[k]; }); return o; }
+      get: (k) => { OPS.cache++; return k in cache ? cache[k] : null; }, put: (k, v) => { OPS.cache++; cache[k] = v; }, remove: (k) => { OPS.cache++; delete cache[k]; },
+      putAll: (o) => { OPS.cache++; Object.assign(cache, o); },
+      getAll: (ks) => { OPS.cache++; const o = {}; ks.forEach((k) => { if (k in cache) o[k] = cache[k]; }); return o; }
     }) },
     PropertiesService: { getScriptProperties: () => ({
-      getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = v; },
-      deleteProperty: (k) => { delete props[k]; }, getProperties: () => Object.assign({}, props)
+      getProperty: (k) => { OPS.props++; return k in props ? props[k] : null; }, setProperty: (k, v) => { OPS.props++; props[k] = v; },
+      deleteProperty: (k) => { OPS.props++; delete props[k]; }, getProperties: () => { OPS.props++; return Object.assign({}, props); }
     }) },
     LockService: { getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} }) },
     ContentService: { MimeType: { JSON: 'json' }, createTextOutput: (s) => ({ text: s, setMimeType() { return this; } }) },
@@ -143,6 +149,8 @@ function createContext(now) {
   const code = fs.readFileSync(path.join(__dirname, '..', 'dist', 'Code.gs'), 'utf8');
   vm.runInContext(code, ctx, { filename: 'Code.gs' });
   ctx._active = active;
+  ctx._ops = OPS;
+  ctx._cache = cache;
   return ctx;
 }
 

@@ -228,7 +228,10 @@ function rateOn_(date) {
 function saleList_(d) {
   var from = d.from || '', to = d.to || '9999';
   var q = String(d.q || '').toLowerCase();
-  var source = (d.fy && archivedSales_(d.fy)) || rows_('Sales');
+  var plain = !d.fy && !d.from && !d.type && !q && (!d.to || d.to >= '9999');
+  // The usual bills screen shows the newest 200: read only the bottom of the tab, not years of bills.
+  var source = (d.fy && archivedSales_(d.fy)) || (plain ? tailRows_('Sales', 260)
+    : d.from ? rowsMatching_('Sales', 'date', function (x) { return x >= from && x <= to; }) : rows_('Sales'));
   var list = source.filter(function (b) {
     if (d.fy && b.fy !== d.fy) return false;
     if (b.date < from || b.date > to) return false;
@@ -332,12 +335,12 @@ function billShop_(s, type) {
   return {
     name: gst ? s.shop_name : q('name'), tagline: gst ? s.shop_tagline : q('tagline'),
     address: gst ? s.shop_address : q('address'), mobile: s.shop_mobile, phones: gst ? s.shop_phones : q('phones'),
-    logo: gst ? s.shop_logo : (s.quote_logo || (s.quote_shop_name ? '' : s.shop_logo)),
+    logo: imgRef_(gst ? s.shop_logo : (s.quote_logo || (s.quote_shop_name ? '' : s.shop_logo))),
     gstin: s.shop_gstin, state: s.shop_state, hsn: s.hsn_code, bis: s.bis_licence,
     terms: gst ? s.bill_terms : (s.quote_footer || s.bill_terms), title: gst ? 'TAX INVOICE' : (s.quote_title || 'QUOTATION'),
     lang: s.bill_lang || 'en', rateUnit: s.bill_rate_unit || '10g',
     template: s.bill_template || 'classic', color: s.bill_color || 'gold', ruleLine: s.bill_rule_line || '',
-    design: json_(gst ? s.bill_design_gst : (s.bill_design_quote || s.bill_design_gst), null), picRight: s.bill_pic_right || '',
+    design: json_(gst ? s.bill_design_gst : (s.bill_design_quote || s.bill_design_gst), null), picRight: imgRef_(s.bill_pic_right),
     fields: json_(gst ? s.bill_fields_gst : s.bill_fields_quote, {})
   };
 }

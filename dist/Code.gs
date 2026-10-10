@@ -10,7 +10,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.8.0';
+var APP_VERSION = '1.9.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -115,7 +115,7 @@ var DEFAULT_SETTINGS = {
 var OWNER_ONLY = {
   'settings.save': 1, 'users.list': 1, 'users.save': 1, 'sale.void': 1, 'cash.opening': 1,
   'admin.archive': 1, 'admin.backupNow': 1, 'loans.edit': 1, 'loans.void': 1,
-  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'admin.check': 1, 'stock.update': 1, 'dues.adjust': 1, 'customers.import': 1
+  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'admin.check': 1, 'stock.update': 1, 'dues.adjust': 1, 'customers.import': 1, 'auth.logoutAll': 1, 'export.list': 1
 };
 
 /* ===== 01_util.js ===== */
@@ -181,7 +181,20 @@ function colLetter_(n) {
 }
 
 /** All rows of a sheet as objects (cached for this request). */
+function cellText_(v) {
+  if (v instanceof Date) v = Utilities.formatDate(v, tz_(), 'yyyy-MM-dd');
+  v = v === null || v === undefined ? '' : String(v);
+  if (v.charAt(0) === "'" && v.charAt(1) === '=') v = v.slice(1);
+  return v;
+}
+function rowObj_(headers, vals, rowNum) {
+  var o = { _row: rowNum };
+  for (var j = 0; j < headers.length; j++) o[headers[j]] = cellText_(vals[j]);
+  return o;
+}
+
 function rows_(name) {
+  _touched[name] = 1;
   if (_rowsCache[name]) return _rowsCache[name];
   var sh = sheet_(name);
   var headers = SCHEMA[name];
@@ -190,22 +203,106 @@ function rows_(name) {
   _rawCount[name] = Math.max(last - 1, 0);
   if (last >= 2) {
     var vals = sh.getRange(2, 1, last - 1, headers.length).getValues();
-    for (var i = 0; i < vals.length; i++) {
-      var o = { _row: i + 2 };
-      for (var j = 0; j < headers.length; j++) {
-        var v = vals[i][j];
-        if (v instanceof Date) v = Utilities.formatDate(v, tz_(), 'yyyy-MM-dd');
-        v = v === null || v === undefined ? '' : String(v);
-        if (v.charAt(0) === "'" && v.charAt(1) === '=') v = v.slice(1);
-        o[headers[j]] = v;
-      }
-      out.push(o);
-    }
+    for (var i = 0; i < vals.length; i++) out.push(rowObj_(headers, vals[i], i + 2));
   }
   // Cancelled cash entries and loan payments stay in the sheet for history but count nowhere.
   if (name === 'Cash' || name === 'LoanTxns') out = out.filter(function (o) { return o.status !== 'void'; });
   _rowsCache[name] = out;
   return out;
+}
+
+/* ---------- Reading only what is needed ("index" reads) ----------
+ * Big tabs are the slow part of Google Sheets. To find a customer's bills or one day's cash entries, read ONE column
+ * (the customer id or the date), pick the matching rows, and read only those rows. If the matches are spread over
+ * too many places, one full read is cheaper, and that is used instead. */
+var READ_CALL_CELLS = 5000; // one extra Sheets call costs about as much as reading this many cells
+
+function rowsMatching_(name, colName, test) {
+  _touched[name] = 1;
+  var cached = _rowsCache[name];
+  if (cached) return cached.filter(function (r) { return test(r[colName]); });
+  var headers = SCHEMA[name];
+  var ci = headers.indexOf(colName);
+  if (ci < 0) throw new Error('No column ' + colName + ' in ' + name);
+  var sh = sheet_(name);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var n = last - 1;
+  var col = sh.getRange(2, ci + 1, n, 1).getValues();
+  var hits = [];
+  for (var i = 0; i < n; i++) if (test(cellText_(col[i][0]))) hits.push(i);
+  if (!hits.length) return [];
+  var runs = [];
+  hits.forEach(function (i) {
+    var r = runs[runs.length - 1];
+    if (r && i <= r.end + 3) r.end = i; else runs.push({ start: i, end: i }); // small gaps: read through them
+  });
+  var runCells = runs.reduce(function (a, r) { return a + (r.end - r.start + 1); }, 0) * headers.length;
+  if (runs.length * READ_CALL_CELLS + runCells >= n * headers.length + READ_CALL_CELLS) {
+    return rows_(name).filter(function (r) { return test(r[colName]); });
+  }
+  var out = [];
+  runs.forEach(function (r) {
+    var vals = sh.getRange(r.start + 2, 1, r.end - r.start + 1, headers.length).getValues();
+    for (var k = 0; k < vals.length; k++) {
+      var o = rowObj_(headers, vals[k], r.start + 2 + k);
+      if (test(o[colName])) out.push(o);
+    }
+  });
+  if (name === 'Cash' || name === 'LoanTxns') out = out.filter(function (o) { return o.status !== 'void'; });
+  return out;
+}
+
+/** Only some columns of every row (e.g. date, amount for a running balance): far fewer cells than the whole tab. */
+var _colsCache = {};
+function readCols_(name, cols) {
+  _touched[name] = 1;
+  var headers = SCHEMA[name];
+  if (_rowsCache[name]) return _rowsCache[name];
+  var ck = name + '|' + cols.join(',') + '|' + (_rawCount[name] || '');
+  if (_colsCache[ck]) return _colsCache[ck];
+  var sh = sheet_(name);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var n = last - 1;
+  var idx = cols.map(function (c) { var i = headers.indexOf(c); if (i < 0) throw new Error('No column ' + c); return i; }).sort(function (a, b) { return a - b; });
+  // contiguous groups of columns, one read each
+  var groups = [];
+  idx.forEach(function (i) { var g = groups[groups.length - 1]; if (g && i === g.end + 1) g.end = i; else groups.push({ start: i, end: i }); });
+  var out = [];
+  for (var r = 0; r < n; r++) out.push({ _row: r + 2 });
+  groups.forEach(function (g) {
+    var vals = sh.getRange(2, g.start + 1, n, g.end - g.start + 1).getValues();
+    for (var r2 = 0; r2 < n; r2++) for (var c = g.start; c <= g.end; c++) out[r2][headers[c]] = cellText_(vals[r2][c - g.start]);
+  });
+  if ((name === 'Cash' || name === 'LoanTxns') && cols.indexOf('status') >= 0) out = out.filter(function (o) { return o.status !== 'void'; });
+  _colsCache[ck] = out;
+  return out;
+}
+
+/** The newest n rows of a tab (tabs are filled from the bottom, so these are the latest entries). */
+function tailRows_(name, n) {
+  _touched[name] = 1;
+  if (_rowsCache[name]) return _rowsCache[name].slice(-n);
+  var headers = SCHEMA[name];
+  var sh = sheet_(name);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var start = Math.max(2, last - n + 1);
+  var vals = sh.getRange(start, 1, last - start + 1, headers.length).getValues();
+  var out = vals.map(function (v, i) { return rowObj_(headers, v, start + i); });
+  if (name === 'Cash' || name === 'LoanTxns') out = out.filter(function (o) { return o.status !== 'void'; });
+  return out;
+}
+
+/* Which tabs this request read and wrote: the read cache keeps an answer until one of ITS tabs changes. */
+var _touched = {}, _written = {};
+function markWritten_(name, keys) {
+  _colsCache = {};
+  // Bill / tag counters live in Settings but no screen depends on them: they don't make every screen re-read.
+  if (name === 'Settings' && keys && keys.every(function (k) { return String(k).indexOf('counter_') === 0; })) return;
+  if (name === 'Audit') return;
+  _written[name] = 1;
 }
 
 function toCell_(v) {
@@ -219,6 +316,7 @@ function toCell_(v) {
 
 /** Appends one record. Missing fields become blank. Returns the record. */
 function insert_(name, obj) {
+  markWritten_(name, name === 'Settings' ? [obj.key] : null);
   var headers = SCHEMA[name];
   var row = headers.map(function (h) { return toCell_(obj[h]); });
   var sh = sheet_(name);
@@ -237,6 +335,7 @@ function insert_(name, obj) {
 /** Appends many records with one write (much faster than one by one). */
 function insertMany_(name, objs) {
   if (!objs.length) return;
+  markWritten_(name, name === 'Settings' ? objs.map(function (o) { return o.key; }) : null);
   if (objs.length === 1) { insert_(name, objs[0]); return; }
   var headers = SCHEMA[name];
   var sh = sheet_(name);
@@ -248,6 +347,7 @@ function insertMany_(name, objs) {
 
 /** Updates fields of the record whose first column equals id. */
 function update_(name, id, patch) {
+  markWritten_(name, name === 'Settings' ? [id] : null);
   var headers = SCHEMA[name];
   var list = _rowsCache[name];
   var rec = null;
@@ -275,10 +375,13 @@ function update_(name, id, patch) {
   return merged;
 }
 
+var _findCount = {};
 function find_(name, id) {
   var key = SCHEMA[name][0];
-  if (!_rowsCache[name]) {
-    // Index lookup: find the one row by its id instead of reading the whole sheet.
+  _findCount[name] = (_findCount[name] || 0) + 1;
+  // A few lookups: find the one row by its id (fast on big sheets). Many lookups in one request (a list that
+  // needs every customer's name): one read of the whole tab is far cheaper than hundreds of searches.
+  if (!_rowsCache[name] && _findCount[name] <= 3) {
     var one = findRowById_(name, id);
     if (one !== undefined) return one;
   }
@@ -289,6 +392,7 @@ function find_(name, id) {
 
 /** Reads one record by id with Google's TextFinder (fast on big sheets). undefined = could not use it. */
 function findRowById_(name, id) {
+  _touched[name] = 1;
   if (id === undefined || id === null || id === '') return null;
   try {
     var sh = sheet_(name);
@@ -393,6 +497,7 @@ function settings_() {
 function setSettings_(map) {
   var keys = Object.keys(map);
   if (!keys.length) return;
+  markWritten_('Settings', keys);
   var list = rows_('Settings');
   var byKey = {};
   list.forEach(function (r) { byKey[r.key] = r; });
@@ -489,24 +594,70 @@ function createUser_(name, username, role, pin) {
   });
 }
 
+/* Wrong-PIN protection. Kept in Script Properties (not the cache, which Google may empty), per login name:
+ * 5 wrong PINs → locked 15 minutes; every further 5 → twice as long (up to 24 hours). The owner is emailed.
+ * The owner can unlock a user by setting a new PIN (Settings → Users, or the sheet menu "Reset an owner PIN"). */
+var LOCK_AFTER = 5;
+function loginFails_(username) {
+  return json_(PropertiesService.getScriptProperties().getProperty('lf_' + username), { n: 0, until: 0 });
+}
+function clearLoginFails_(username) {
+  try { PropertiesService.getScriptProperties().deleteProperty('lf_' + String(username || '').toLowerCase()); } catch (e) { /* ignore */ }
+}
+
 function login_(data) {
-  var username = String(data.username || '').trim().toLowerCase();
-  var cache = CacheService.getScriptCache();
-  var failKey = 'fail_' + username;
-  var fails = num_(cache.get(failKey));
-  if (fails >= 5) throw new Error('Too many wrong PINs. Try again after 10 minutes.');
+  var username = String(data.username || '').trim().toLowerCase().slice(0, 60);
+  req_(username, 'Wrong username or PIN');
+  var props = PropertiesService.getScriptProperties();
+  var f = loginFails_(username);
+  if (f.until > Date.now()) {
+    var mins = Math.ceil((f.until - Date.now()) / 60000);
+    throw new Error('Too many wrong PINs. Try again after ' + (mins > 90 ? Math.ceil(mins / 60) + ' hours' : mins + ' minutes') + ', or ask the owner to set a new PIN.');
+  }
   var u = findUser_(username);
   if (!u || u.active !== 'true' || hashPin_(u.salt, String(data.pin || '')) !== u.pinHash) {
-    cache.put(failKey, String(fails + 1), 600);
+    f.n = (f.n || 0) + 1;
+    if (f.n % LOCK_AFTER === 0) {
+      f.until = Date.now() + Math.min(15 * 60000 * Math.pow(2, f.n / LOCK_AFTER - 1), 86400000);
+      alertOwnerLogin_(username, f.n);
+    }
+    props.setProperty('lf_' + username, JSON.stringify(f));
+    audit_(null, 'login.failed', username, { fails: f.n });
     throw new Error('Wrong username or PIN');
   }
-  cache.remove(failKey);
+  if (f.n) props.deleteProperty('lf_' + username);
   var token = Utilities.getUuid() + Utilities.getUuid();
   var props = PropertiesService.getScriptProperties();
   cleanSessions_(props);
   props.setProperty('s_' + token, JSON.stringify({ u: u.id, exp: Date.now() + SESSION_DAYS * 86400000 }));
   audit_(u, 'login', u.id, {});
   return { token: token, user: publicUser_(u) };
+}
+
+/** Emails the owner (nightly-report address, else the Google account) when a login gets locked. At most once an hour per name. */
+function alertOwnerLogin_(username, fails) {
+  try {
+    var cache = CacheService.getScriptCache();
+    if (cache.get('lfmail_' + username)) return;
+    cache.put('lfmail_' + username, '1', 3600);
+    var to = settings_().report_email || Session.getEffectiveUser().getEmail();
+    if (!to) return;
+    MailApp.sendEmail(to, 'DukanKaApp: wrong PINs for "' + username + '"',
+      fails + ' wrong PIN tries for the login name "' + username + '" on ' + settings_().shop_name + '. The login is locked for a while.\n\n' +
+      'If this was not you or your staff, change that PIN in the app (Settings → Users) and use "Log out all phones".');
+  } catch (e) { /* email is best effort */ }
+}
+
+/** Owner: log out every phone (lost phone, staff left). Keeps the phone that asked. */
+function logoutAll_(user, token) {
+  var props = PropertiesService.getScriptProperties();
+  var all = props.getProperties();
+  var n = 0;
+  Object.keys(all).forEach(function (k) {
+    if (k.indexOf('s_') === 0 && k !== 's_' + token) { props.deleteProperty(k); n++; }
+  });
+  audit_(user, 'auth.logoutAll', '', { sessions: n });
+  return { loggedOut: n };
 }
 
 function cleanSessions_(props) {
@@ -557,6 +708,7 @@ function usersList_() {
 
 function usersSave_(user, d) {
   if (!d.id) {
+    req_((d.role || 'employee') !== 'owner' || String(d.pin || '').length >= 6, 'The owner PIN must be at least 6 digits');
     var nu = createUser_(d.name, d.username, d.role || 'employee', d.pin);
     audit_(user, 'user.add', nu.id, { username: nu.username, role: nu.role });
     return publicUser_(nu);
@@ -572,6 +724,7 @@ function usersSave_(user, d) {
   if (d.active !== undefined) patch.active = d.active ? 'true' : 'false';
   if (d.pin) {
     req_(/^\d{4,8}$/.test(String(d.pin)), 'PIN must be 4 to 8 digits');
+    req_((patch.role || u.role) !== 'owner' || String(d.pin).length >= 6, 'The owner PIN must be at least 6 digits');
     patch.salt = Utilities.getUuid();
     patch.pinHash = hashPin_(patch.salt, String(d.pin));
   }
@@ -585,6 +738,7 @@ function usersSave_(user, d) {
   var saved = update_('Users', u.id, patch);
   try { CacheService.getScriptCache().remove('u_' + u.id); } catch (e) { /* ignore */ }
   if (patch.active === 'false' || patch.pinHash) dropSessionsOf_(u.id);
+  if (patch.pinHash) clearLoginFails_(u.username);
   audit_(user, 'user.update', u.id, { name: patch.name, role: patch.role, active: patch.active, pin: !!d.pin });
   return publicUser_(saved);
 }
@@ -599,6 +753,7 @@ function usersSave_(user, d) {
  */
 function doPost(e) {
   var out;
+  _findCount = {}; _colsCache = {}; // per request
   finishInstall_(); // a shop made by the one-link installer finishes itself on first use (no-op afterwards)
   try {
     var body = json_(e && e.postData && e.postData.contents, {});
@@ -623,7 +778,9 @@ function doGet(e) {
 var ROUTES = {
   'ping': function () { return { app: 'DukanKaApp', version: APP_VERSION, shop: settings_().shop_name }; },
   'bootstrap': function (u) { return bootstrap_(u); },
+  'settings.images': function () { return settingsImages_(); },
   'auth.logout': function (u, d, token) { return logout_(token); },
+  'auth.logoutAll': function (u, d, token) { return logoutAll_(u, token); },
   'settings.save': function (u, d) { return settingsSave_(u, d); },
   'users.list': function () { return usersList_(); },
   'users.save': function (u, d) { return usersSave_(u, d); },
@@ -692,7 +849,7 @@ var ROUTES = {
 };
 
 var READ_ONLY = {
-  'ping': 1, 'bootstrap': 1, 'rates.list': 1, 'customers.search': 1, 'customers.get': 1, 'sale.list': 1,
+  'ping': 1, 'bootstrap': 1, 'settings.images': 1, 'rates.list': 1, 'customers.search': 1, 'customers.get': 1, 'sale.list': 1,
   'sale.get': 1, 'oldgold.list': 1, 'loans.list': 1, 'loans.get': 1, 'orders.list': 1, 'orders.get': 1,
   'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'stock.photo': 1, 'melt.list': 1, 'fine.summary': 1,
   'parties.list': 1, 'parties.ledger': 1, 'cash.list': 1, 'reports.daily': 1, 'reports.month': 1,
@@ -719,9 +876,9 @@ function handle_(action, token, data) {
       var prev = cache.get(rid);
       if (prev) return json_(prev, {});
     }
+    _written = {};
     migrateDues_();
     var result = fn(user, data, token);
-    bumpDataVersion_();
     if (cache) {
       try {
         var str = JSON.stringify(result === undefined ? {} : result);
@@ -732,14 +889,29 @@ function handle_(action, token, data) {
     return result;
   } finally {
     SpreadsheetApp.flush();
+    // Even a save that stopped half way may have written something: those tabs are read fresh next time.
+    bumpTabVersions_(Object.keys(_written));
     lock.releaseLock();
   }
+}
+
+/* Shop pictures (logo, quotation logo, BIS logo) are up to 45 KB each. They are sent once and kept on the phone;
+ * every other answer carries only a short reference like "img:Ab12…". */
+var IMAGE_KEYS = ['shop_logo', 'quote_logo', 'bill_pic_right'];
+function imgRef_(v) {
+  if (!v) return '';
+  return 'img:' + cacheKey_(String(v)).slice(0, 16);
+}
+function settingsImages_() {
+  var s = settings_(), out = {};
+  IMAGE_KEYS.forEach(function (k) { if (s[k]) out[imgRef_(s[k])] = s[k]; });
+  return out;
 }
 
 function bootstrap_(user) {
   var s = settings_();
   var clean = {};
-  Object.keys(s).forEach(function (k) { if (k.indexOf('counter_') !== 0) clean[k] = s[k]; });
+  Object.keys(s).forEach(function (k) { if (k.indexOf('counter_') !== 0 && k !== 'photo_folder') clean[k] = IMAGE_KEYS.indexOf(k) >= 0 ? imgRef_(s[k]) : s[k]; });
   return {
     user: publicUser_(user),
     settings: clean,
@@ -755,10 +927,11 @@ function hideCost_(user, bill) {
   return bill;
 }
 
-/* ---------- Read cache: the "index" that makes repeated screens instant ----------
- * Reading big sheets is the slow part. Every answer to a read is kept in CacheService for 10 minutes,
- * filed under the current "data version". Any save changes the version, so after a save every screen
- * is read fresh; until then the same screen comes back in a few milliseconds without opening the sheet. */
+/* ---------- Read cache: repeated screens come back in milliseconds ----------
+ * Every answer to a read is kept in CacheService for 10 minutes, together with the list of tabs it was made from.
+ * Each tab has its own version; a save bumps only the tabs it wrote. So saving a bill (Sales, Cash) does not throw
+ * away the girvi list or the stock screen — only answers that used those tabs are worked out again.
+ * dataver is a global version on top, for rare full changes (restore from backup, updates). */
 
 function dataVersion_() {
   var c = CacheService.getScriptCache();
@@ -769,24 +942,58 @@ function dataVersion_() {
 function bumpDataVersion_() {
   try { CacheService.getScriptCache().put('dataver', String(Date.now()) + Math.random().toString(36).slice(2, 6), 21600); } catch (e) { /* ignore */ }
 }
+function stamp_() { return String(Date.now()) + Math.random().toString(36).slice(2, 6); }
+
+/** After a save: new versions for the tabs it wrote (one cache call). */
+function bumpTabVersions_(names) {
+  if (!names.length) return;
+  var put = {};
+  names.forEach(function (n) { put['sv_' + n] = stamp_(); });
+  try { CacheService.getScriptCache().putAll(put, 21600); } catch (e) { bumpDataVersion_(); }
+}
+
+/** Current versions of some tabs. A version that is missing (never saved, or dropped from the cache) gets a new
+ *  random one, so an old answer can never match by accident. */
+function tabVersions_(cache, names) {
+  var keys = names.map(function (n) { return 'sv_' + n; });
+  var got = keys.length ? cache.getAll(keys) || {} : {};
+  var missing = {};
+  keys.forEach(function (k) { if (!got[k]) { got[k] = stamp_(); missing[k] = got[k]; } });
+  if (Object.keys(missing).length) cache.putAll(missing, 21600);
+  return names.map(function (n) { return n + ':' + got['sv_' + n]; }).join(',');
+}
 
 var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1, 'admin.check': 1, 'stock.photo': 1 };
+
+function cacheKey_(raw) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, raw, Utilities.Charset.UTF_8));
+}
 
 function cachedRead_(action, user, data, run) {
   if (NO_READ_CACHE[action]) return run();
   var cache = CacheService.getScriptCache();
-  var key;
+  var base, metaKey;
   try {
-    var raw = [dataVersion_(), user.id, user.role, today_(), action, JSON.stringify(data || {})].join('|');
-    key = 'rc_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, raw, Utilities.Charset.UTF_8));
-    var hit = cache.get(key);
-    if (hit) return JSON.parse(hit);
-  } catch (e) { key = null; }
+    base = [dataVersion_(), user.id, user.role, today_(), action, JSON.stringify(data || {})].join('|');
+    metaKey = 'rm_' + cacheKey_(base);
+    var deps = json_(cache.get(metaKey), null);
+    if (deps) {
+      var hit = cache.get('rc_' + cacheKey_(base + '|' + tabVersions_(cache, deps)));
+      if (hit) return JSON.parse(hit);
+    }
+  } catch (e) { base = null; }
+  _touched = {};
   var result = run();
-  if (key) {
+  if (base) {
     try {
+      var used = Object.keys(_touched).sort();
       var str = JSON.stringify(result === undefined ? null : result);
-      if (str.length * 3 < 95000) cache.put(key, str, 600);
+      if (str.length * 3 < 95000) {
+        var put = {};
+        put[metaKey] = JSON.stringify(used);
+        put['rc_' + cacheKey_(base + '|' + tabVersions_(cache, used))] = str;
+        cache.putAll(put, 600);
+      }
     } catch (e2) { /* too big or cache full: fine */ }
   }
   return result;
@@ -805,6 +1012,7 @@ function settingsSave_(user, d) {
   Object.keys(d || {}).forEach(function (k) {
     if (allowed.indexOf(k) < 0) return;
     var v = d[k];
+    if (/^img:/.test(String(v))) return; // a picture sent back unchanged (only its reference): keep the saved one
     if (typeof v === 'object') v = JSON.stringify(v);
     v = String(v);
     if (k.indexOf('formula_') === 0) testFormula_(k, v);
@@ -992,7 +1200,8 @@ function customersSearch_(d) {
   var digits = q.replace(/\D/g, '');
   if (digits.length > 10 && /^(91|0)/.test(digits)) digits = digits.slice(-10);
   var words = q.split(' ');
-  var list = rows_('Customers');
+  // Only the columns the search needs (not address / notes / who added).
+  var list = readCols_('Customers', ['id', 'firstName', 'lastName', 'mobile', 'village']);
   var scored = [];
   list.forEach(function (c) {
     if (village && c.village.toLowerCase() !== village) return;
@@ -1009,9 +1218,10 @@ function customersSearch_(d) {
   });
   scored.sort(function (a, b) { return b.s - a.s || (a.c.firstName < b.c.firstName ? -1 : 1); });
   var top = scored.slice(0, 40);
-  var openLoans = countBy_(where_('Loans', function (l) { return l.status === 'open'; }), 'customerId');
-  var openOrders = countBy_(where_('Orders', function (o) { return o.status !== 'delivered' && o.status !== 'cancelled'; }), 'customerId');
-  var openRepairs = countBy_(where_('Repairs', function (r) { return r.status !== 'delivered'; }), 'customerId');
+  // The small "2 girvi / 1 order" tags: two columns of each tab are enough.
+  var openLoans = countBy_(readCols_('Loans', ['customerId', 'status']).filter(function (l) { return l.status === 'open'; }), 'customerId');
+  var openOrders = countBy_(readCols_('Orders', ['customerId', 'status']).filter(function (o) { return o.status !== 'delivered' && o.status !== 'cancelled'; }), 'customerId');
+  var openRepairs = countBy_(readCols_('Repairs', ['customerId', 'status']).filter(function (r) { return r.status !== 'delivered'; }), 'customerId');
   var villages = {};
   list.forEach(function (c) { if (c.village) villages[c.village] = (villages[c.village] || 0) + 1; });
   return {
@@ -1038,32 +1248,52 @@ function customerGet_(id) {
   req_(c, 'Customer not found');
   var t = today_();
   var opts = { formula: formula_('formula_interest'), minDays: num_(settings_().interest_min_days) };
-  var loans = where_('Loans', function (l) { return l.customerId === id; }).map(function (l) {
-    var st = l.status === 'open' ? Calc.loanStatement(l, loanTxns_(l.id), t, opts) : null;
+  var mine = function (x) { return x === id; };
+  // Only this customer's rows are read from each tab (see rowsMatching_), not the whole shop's history.
+  var myLoans = rowsMatching_('Loans', 'customerId', mine);
+  var openIds = {};
+  myLoans.forEach(function (l) { if (l.status === 'open') openIds[l.id] = 1; });
+  var txBy = {};
+  if (Object.keys(openIds).length) rowsMatching_('LoanTxns', 'loanId', function (x) { return openIds[x]; }).forEach(function (x) {
+    (txBy[x.loanId] = txBy[x.loanId] || []).push({ id: x.id, date: x.date, type: x.type, amount: num_(x.amount), interestPart: num_(x.interestPart),
+      principalPart: num_(x.principalPart), mode: x.mode, by: x.by, at: x.at });
+  });
+  var loans = myLoans.map(function (l) {
+    var st = l.status === 'open' ? Calc.loanStatement(l, txBy[l.id] || [], t, opts) : null;
     return {
       id: l.id, date: l.date, item: l.item, metal: l.metal, netWt: num_(l.netWt), principal: num_(l.principal),
       ratePct: num_(l.ratePct), status: l.status, closedAt: l.closedAt,
       days: st ? st.totalDays : null, totalDue: st ? st.totalDue : 0
     };
   });
-  var orders = where_('Orders', function (o) { return o.customerId === id; }).map(orderSummary_);
-  var repairs = where_('Repairs', function (r) { return r.customerId === id; });
-  var sales = where_('Sales', function (s) { return s.customerId === id; }).slice(-20).reverse().map(function (s) {
+  var myOrders = rowsMatching_('Orders', 'customerId', mine);
+  if (myOrders.length && !_rowsCache.OrderPayments) {
+    var oids = {};
+    myOrders.forEach(function (o) { oids[o.id] = 1; });
+    var pays = rowsMatching_('OrderPayments', 'orderId', function (x) { return oids[x]; });
+    _payIndex = { rows: null, n: -1, by: {}, partial: true };
+    pays.forEach(function (p) { (_payIndex.by[p.orderId] = _payIndex.by[p.orderId] || []).push(p); });
+  }
+  var orders = myOrders.map(orderSummary_);
+  if (_payIndex && _payIndex.partial) _payIndex = null;
+  var repairs = rowsMatching_('Repairs', 'customerId', mine);
+  var sales = rowsMatching_('Sales', 'customerId', mine).slice(-20).reverse().map(function (s) {
     return { id: s.id, billNo: s.billNo, type: s.type, date: s.date, net: num_(s.net), status: s.status };
   });
-  var oldGold = where_('OldGold', function (g) { return g.customerId === id; }).slice(-20).reverse().map(function (g) {
+  var oldGold = rowsMatching_('OldGold', 'customerId', mine).slice(-20).reverse().map(function (g) {
     return {
       id: g.id, date: g.date, item: g.item, metal: g.metal, weight: num_(g.weight), cutPct: num_(g.cutPct),
       customerFine: num_(g.customerFine), amount: num_(g.amount), status: g.status, source: g.source, billId: g.billId
     };
   });
+  var myDues = rowsMatching_('Dues', 'customerId', mine);
   var girviDue = loans.reduce(function (a, l) { return a + (l.status === 'open' ? l.totalDue : 0); }, 0);
   var advance = orders.reduce(function (a, o) { return a + (o.status !== 'delivered' && o.status !== 'cancelled' ? o.paid : 0); }, 0);
   return {
     customer: c, name: customerName_(c), loans: loans, orders: orders, repairs: repairs, sales: sales,
     oldGold: oldGold, girviDue: Math.round(girviDue), orderAdvance: Math.round(advance),
-    udhaar: customerUdhaar_(id),
-    dues: rows_('Dues').filter(function (x) { return x.customerId === id; }).slice(-20)
+    udhaar: round2_(myDues.reduce(function (a, x) { return a + num_(x.amount); }, 0)),
+    dues: myDues.slice(-20)
       .map(function (x) { return { date: x.date, amount: num_(x.amount), refType: x.refType }; })
   };
 }
@@ -1299,7 +1529,10 @@ function rateOn_(date) {
 function saleList_(d) {
   var from = d.from || '', to = d.to || '9999';
   var q = String(d.q || '').toLowerCase();
-  var source = (d.fy && archivedSales_(d.fy)) || rows_('Sales');
+  var plain = !d.fy && !d.from && !d.type && !q && (!d.to || d.to >= '9999');
+  // The usual bills screen shows the newest 200: read only the bottom of the tab, not years of bills.
+  var source = (d.fy && archivedSales_(d.fy)) || (plain ? tailRows_('Sales', 260)
+    : d.from ? rowsMatching_('Sales', 'date', function (x) { return x >= from && x <= to; }) : rows_('Sales'));
   var list = source.filter(function (b) {
     if (d.fy && b.fy !== d.fy) return false;
     if (b.date < from || b.date > to) return false;
@@ -1403,12 +1636,12 @@ function billShop_(s, type) {
   return {
     name: gst ? s.shop_name : q('name'), tagline: gst ? s.shop_tagline : q('tagline'),
     address: gst ? s.shop_address : q('address'), mobile: s.shop_mobile, phones: gst ? s.shop_phones : q('phones'),
-    logo: gst ? s.shop_logo : (s.quote_logo || (s.quote_shop_name ? '' : s.shop_logo)),
+    logo: imgRef_(gst ? s.shop_logo : (s.quote_logo || (s.quote_shop_name ? '' : s.shop_logo))),
     gstin: s.shop_gstin, state: s.shop_state, hsn: s.hsn_code, bis: s.bis_licence,
     terms: gst ? s.bill_terms : (s.quote_footer || s.bill_terms), title: gst ? 'TAX INVOICE' : (s.quote_title || 'QUOTATION'),
     lang: s.bill_lang || 'en', rateUnit: s.bill_rate_unit || '10g',
     template: s.bill_template || 'classic', color: s.bill_color || 'gold', ruleLine: s.bill_rule_line || '',
-    design: json_(gst ? s.bill_design_gst : (s.bill_design_quote || s.bill_design_gst), null), picRight: s.bill_pic_right || '',
+    design: json_(gst ? s.bill_design_gst : (s.bill_design_quote || s.bill_design_gst), null), picRight: imgRef_(s.bill_pic_right),
     fields: json_(gst ? s.bill_fields_gst : s.bill_fields_quote, {})
   };
 }
@@ -1628,7 +1861,7 @@ function loanPay_(user, d) {
 var _payIndex = null;
 function orderPayments_(orderId) {
   // Built once per request (cleared when a payment is added): lists of many orders stay fast.
-  if (!_payIndex || _payIndex.rows !== rows_('OrderPayments') || _payIndex.n !== rows_('OrderPayments').length) {
+  if (!_payIndex || (!_payIndex.partial && (_payIndex.rows !== rows_('OrderPayments') || _payIndex.n !== rows_('OrderPayments').length))) {
     _payIndex = { rows: rows_('OrderPayments'), n: rows_('OrderPayments').length, by: {} };
     _payIndex.rows.forEach(function (p) { (_payIndex.by[p.orderId] = _payIndex.by[p.orderId] || []).push(p); });
   }
@@ -2329,7 +2562,8 @@ function cashBalanceBefore_(date, mode) {
   var bal = mode === 'cash' ? num_(s.cash_opening) : 0;
   // The opening amount is the drawer at the start of the opening date. Days before it are worked out backwards.
   var back = date < openDate;
-  rows_('Cash').forEach(function (c) {
+  // Only 5 of the 12 columns are needed for the running balance.
+  readCols_('Cash', ['date', 'dir', 'mode', 'amount', 'status']).forEach(function (c) {
     if (c.mode !== mode) return;
     var sign = c.dir === 'in' ? 1 : -1;
     if (back) { if (c.date >= date && c.date < openDate) bal -= sign * num_(c.amount); }
@@ -2340,7 +2574,7 @@ function cashBalanceBefore_(date, mode) {
 
 function cashList_(d) {
   var from = readDate_(d.from), to = d.to ? readDate_(d.to) : from;
-  var entries = rows_('Cash').filter(function (c) { return c.date >= from && c.date <= to; }).map(function (c) {
+  var entries = rowsMatching_('Cash', 'date', function (x) { return x >= from && x <= to; }).map(function (c) {
     return { id: c.id, date: c.date, dir: c.dir, mode: c.mode, amount: num_(c.amount), category: c.category,
       refType: c.refType, notes: c.notes, by: c.by, at: c.at };
   }).reverse();
@@ -2379,7 +2613,9 @@ function cashOpening_(user, d) {
 function reportDaily_(date) {
   date = readDate_(date);
   var rate = rateOn_(date) || { g24: 0 };
-  var sales = rows_('Sales').filter(function (b) { return b.date === date && b.status !== 'void'; });
+  var on = function (x) { return x === date; };
+  // One day's rows only (rowsMatching_ reads the date column, then just that day's rows).
+  var sales = rowsMatching_('Sales', 'date', on).filter(function (b) { return b.status !== 'void'; });
   var salesTotal = 0, salesProfit = 0, taxTotal = 0, unknownCostLines = 0;
   sales.forEach(function (b) {
     salesTotal += num_(b.invoiceTotal);
@@ -2390,15 +2626,14 @@ function reportDaily_(date) {
     });
   });
   var interest = 0, loansClosed = 0;
-  rows_('LoanTxns').forEach(function (t) {
-    if (t.date !== date) return;
+  rowsMatching_('LoanTxns', 'date', on).forEach(function (t) {
     interest += num_(t.interestPart);
     if (t.type === 'close') loansClosed++;
   });
-  var newLoans = rows_('Loans').filter(function (l) { return l.date === date && l.status !== 'void'; });
-  var repairs = rows_('Repairs').filter(function (r) { return r.deliveredAt === date; });
+  var newLoans = rowsMatching_('Loans', 'date', on).filter(function (l) { return l.status !== 'void'; });
+  var repairs = rowsMatching_('Repairs', 'deliveredAt', on);
   var repairProfit = repairs.reduce(function (a, r) { return a + num_(r.custCharge) - num_(r.karigarCost); }, 0);
-  var delivered = rows_('Orders').filter(function (o) { return o.deliveredAt === date && o.status === 'delivered'; });
+  var delivered = rowsMatching_('Orders', 'deliveredAt', on).filter(function (o) { return o.status === 'delivered'; });
   // Making profit = making charged to the customer − labour actually booked to the karigar for that order.
   var labourOf = {};
   rows_('PartyLedger').forEach(function (e) {
@@ -2411,13 +2646,13 @@ function reportDaily_(date) {
   var meltGain = melts.reduce(function (a, m) {
     return a + num_(m.actualFine) * num_(m.metal === 'silver' ? rate.silver : rate.g24) - num_(m.paidAmount) - num_(m.cost);
   }, 0);
-  var cashEntries = rows_('Cash').filter(function (c) { return c.date === date; });
+  var cashEntries = rowsMatching_('Cash', 'date', on);
   var expenses = cashEntries.filter(function (c) { return c.dir === 'out' && c.category === 'expense'; })
     .reduce(function (a, c) { return a + num_(c.amount); }, 0);
   var otherIncome = cashEntries.filter(function (c) { return c.dir === 'in' && c.category === 'other-income'; })
     .reduce(function (a, c) { return a + num_(c.amount); }, 0);
-  var oldBought = rows_('OldGold').filter(function (g) { return g.date === date && g.status !== 'void'; });
-  var booked = rows_('Orders').filter(function (o) { return o.date === date && o.status !== 'cancelled'; });
+  var oldBought = rowsMatching_('OldGold', 'date', on).filter(function (g) { return g.status !== 'void'; });
+  var booked = rowsMatching_('Orders', 'date', on).filter(function (o) { return o.status !== 'cancelled'; });
   var cash = cashList_({ from: date, to: date });
   // Optional (Settings): GST under reverse charge on old gold bought from customers, for the shop's accountant.
   var rcmOn = settings_().oldgold_rcm === 'true';
@@ -2453,6 +2688,8 @@ function reportMonth_(month) {
   var days = new Date(y, m, 0).getDate();
   var t = today_();
   var out = [], total = 0;
+  // A whole month: read each tab once and work every day from memory.
+  ['Sales', 'LoanTxns', 'Loans', 'Repairs', 'Orders', 'Cash', 'OldGold', 'PartyLedger', 'Melts'].forEach(function (n) { rows_(n); });
   var parts = { sales: 0, interest: 0, repair: 0, making: 0, melting: 0, other: 0, expenses: 0 };
   for (var d = 1; d <= days; d++) {
     var date = month + '-' + String(d).padStart(2, '0');
@@ -2588,13 +2825,19 @@ function duesList_(d) {
     if (r.due <= 0.5) return false;
     return !q || (r.customerName + ' ' + r.mobile).toLowerCase().indexOf(q) >= 0;
   });
-  list.forEach(function (r) {
-    var c = find_('Customers', r.customerId);
-    if (c) { r.customerName = customerName_(c); r.mobile = c.mobile; r.village = c.village; }
-    r.items = r.items.slice(-10).reverse();
-  });
   list.sort(function (a, b) { return a.since < b.since ? -1 : 1; });
-  return { list: list, total: Math.round(list.reduce(function (a, r) { return a + r.due; }, 0)), count: list.length };
+  var total = Math.round(list.reduce(function (a, r) { return a + r.due; }, 0)), count = list.length;
+  // A page at a time (oldest baki first): the phone gets a small answer even when hundreds of customers owe.
+  var limit = Math.min(Math.max(parseInt(d.limit, 10) || 100, 20), 1000);
+  list = list.slice(0, limit);
+  var names = {};
+  if (list.length > 3) readCols_('Customers', ['id', 'firstName', 'lastName', 'mobile', 'village']).forEach(function (c) { names[c.id] = c; });
+  list.forEach(function (r) {
+    var c = names[r.customerId] || (list.length <= 3 ? find_('Customers', r.customerId) : null);
+    if (c) { r.customerName = customerName_(c); r.mobile = c.mobile; r.village = c.village; }
+    r.items = r.items.slice(-6).reverse().map(function (x) { return { date: x.date, amount: x.amount, refType: x.refType, notes: x.notes }; });
+  });
+  return { list: list, total: total, count: count, more: count > list.length };
 }
 
 function duesPay_(user, d) {
@@ -2736,16 +2979,20 @@ function cashVoid_(user, d) {
 function homeSummary_() {
   var t = today_();
   var yearAgo = String(parseInt(t.slice(0, 4), 10) - 1) + t.slice(4);
-  var orders = rows_('Orders').filter(function (o) { return o.status !== 'delivered' && o.status !== 'cancelled'; });
-  var dues = duesList_({});
+  // Home only needs counts: a few columns of each tab, never whole tabs.
+  var orders = readCols_('Orders', ['status', 'deliveryDate']).filter(function (o) { return o.status !== 'delivered' && o.status !== 'cancelled'; });
+  var loans = readCols_('Loans', ['date', 'status']).filter(function (l) { return l.status === 'open'; });
+  var due = {};
+  readCols_('Dues', ['customerId', 'amount']).forEach(function (x) { due[x.customerId] = (due[x.customerId] || 0) + num_(x.amount); });
+  var owing = Object.keys(due).filter(function (k) { return round2_(due[k]) > 0.5; });
   return {
     ordersDueToday: orders.filter(function (o) { return o.deliveryDate === t; }).length,
     ordersLate: orders.filter(function (o) { return o.deliveryDate && o.deliveryDate < t; }).length,
-    loansOld: rows_('Loans').filter(function (l) { return l.status === 'open' && l.date <= yearAgo; }).length,
-    loansOpen: rows_('Loans').filter(function (l) { return l.status === 'open'; }).length,
+    loansOld: loans.filter(function (l) { return l.date <= yearAgo; }).length,
+    loansOpen: loans.length,
     ordersPending: orders.length,
-    repairsReady: rows_('Repairs').filter(function (r) { return r.status === 'ready'; }).length,
-    duesCount: dues.count, duesTotal: dues.total
+    repairsReady: readCols_('Repairs', ['status']).filter(function (r) { return r.status === 'ready'; }).length,
+    duesCount: owing.length, duesTotal: Math.round(owing.reduce(function (a, k) { return a + round2_(due[k]); }, 0))
   };
 }
 
@@ -2774,6 +3021,7 @@ function migrateDues_() {
   if (out.length) {
     var headers = SCHEMA.Dues;
     var sh = sheet_('Dues');
+    markWritten_('Dues');
     sh.getRange(sh.getLastRow() + 1, 1, out.length, headers.length)
       .setValues(out.map(function (o) { return headers.map(function (h) { return toCell_(o[h]); }); }));
     delete _rowsCache.Dues;
@@ -3041,7 +3289,7 @@ function resetOwnerPin() {
   if (uname.getSelectedButton() !== ui.Button.OK) return;
   var u = findUser_(uname.getResponseText());
   if (!u) { ui.alert('No such user'); return; }
-  var pin = ui.prompt('New PIN', '4 to 8 digits:', ui.ButtonSet.OK_CANCEL);
+  var pin = ui.prompt('New PIN', '6 to 8 digits:', ui.ButtonSet.OK_CANCEL);
   if (pin.getSelectedButton() !== ui.Button.OK) return;
   usersSave_({ username: 'sheet-menu' }, { id: u.id, pin: pin.getResponseText().trim(), active: true });
   ui.alert('PIN changed for ' + u.username);
@@ -3082,6 +3330,7 @@ function archiveFy_(user, fy) {
   if (keep.length) sh.getRange(2, 1, keep.length, headers.length).setValues(keep);
   if (last > keep.length + 1) sh.getRange(keep.length + 2, 1, last - keep.length - 1, headers.length).clearContent();
   delete _rowsCache.Sales;
+  markWritten_('Sales');
   if (!oldId) setSetting_('archive_' + fy, arch.getId());
   audit_(user, 'archive', fy, { bills: move.length, file: arch.getId() });
   return { moved: move.length, fileUrl: arch.getUrl() };
@@ -3106,9 +3355,11 @@ function archiveFy_(user, fy) {
  * TRUST NOTE: auto-update downloads the backend from this GitHub repo and installs it in every
  * shop that has auto-update on. Whoever can push to the repo's main branch can change the code that
  * runs in every shop's Google account. Protect the branch (2-step login, no other writers).
+ * Shops update from the "stable" branch, not "main": new work reaches shops only after it is tested and
+ * "stable" is moved forward on purpose (git push origin main:stable).
  * A shop can turn it off: Dukan App → Auto-update on / off.
  */
-var UPDATE_BASE_URL = 'https://raw.githubusercontent.com/SovanikaVR/DukanKaApp/main/dist/';
+var UPDATE_BASE_URL = 'https://raw.githubusercontent.com/SovanikaVR/DukanKaApp/stable/dist/';
 var APP_PAGE_URL = 'https://sovanikavr.github.io/DukanKaApp/';
 var SCRIPT_API_URL = 'https://script.googleapis.com/v1/projects/';
 var API_SETTINGS_URL = 'https://script.google.com/home/usersettings';
@@ -4149,7 +4400,23 @@ function checkData_() {
   rows_('Sales').forEach(function (b) {
     try { JSON.parse(b.lines || '[]'); } catch (e) { problems.push('Sales row ' + b._row + ' (' + b.billNo + '): item lines are damaged'); }
   });
+  // Safety: the shop's sheet should not be open to everyone with the link, and should have few other editors.
+  var warnings = sharingWarnings_();
+  warnings.forEach(function (w) { problems.push(w); });
   return { ok: !problems.length, problems: problems.slice(0, 50), count: problems.length, checkedAt: nowIso_() };
+}
+
+function sharingWarnings_() {
+  var out = [];
+  try {
+    var file = DriveApp.getFileById(ss_().getId());
+    var access = String(file.getSharingAccess());
+    if (access === 'ANYONE' || access === 'ANYONE_WITH_LINK') out.push('SAFETY: the Google Sheet can be opened by anyone with its link. Open the sheet → Share → General access → Restricted.');
+    else if (access === 'DOMAIN' || access === 'DOMAIN_WITH_LINK') out.push('SAFETY: the Google Sheet is shared with a whole organisation. Set Share → General access → Restricted.');
+    var editors = file.getEditors().map(function (e) { return e.getEmail(); }).filter(Boolean);
+    if (editors.length) out.push('SAFETY: these Google accounts can change the sheet directly: ' + editors.join(', ') + '. Remove anyone who should not (Share).');
+  } catch (e) { /* no Drive access: skip */ }
+  return out;
 }
 
 /** Menu: Check my data. */

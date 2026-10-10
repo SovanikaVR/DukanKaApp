@@ -10,6 +10,7 @@ function settingsSave_(user, d) {
   Object.keys(d || {}).forEach(function (k) {
     if (allowed.indexOf(k) < 0) return;
     var v = d[k];
+    if (/^img:/.test(String(v))) return; // a picture sent back unchanged (only its reference): keep the saved one
     if (typeof v === 'object') v = JSON.stringify(v);
     v = String(v);
     if (k.indexOf('formula_') === 0) testFormula_(k, v);
@@ -197,7 +198,8 @@ function customersSearch_(d) {
   var digits = q.replace(/\D/g, '');
   if (digits.length > 10 && /^(91|0)/.test(digits)) digits = digits.slice(-10);
   var words = q.split(' ');
-  var list = rows_('Customers');
+  // Only the columns the search needs (not address / notes / who added).
+  var list = readCols_('Customers', ['id', 'firstName', 'lastName', 'mobile', 'village']);
   var scored = [];
   list.forEach(function (c) {
     if (village && c.village.toLowerCase() !== village) return;
@@ -214,9 +216,10 @@ function customersSearch_(d) {
   });
   scored.sort(function (a, b) { return b.s - a.s || (a.c.firstName < b.c.firstName ? -1 : 1); });
   var top = scored.slice(0, 40);
-  var openLoans = countBy_(where_('Loans', function (l) { return l.status === 'open'; }), 'customerId');
-  var openOrders = countBy_(where_('Orders', function (o) { return o.status !== 'delivered' && o.status !== 'cancelled'; }), 'customerId');
-  var openRepairs = countBy_(where_('Repairs', function (r) { return r.status !== 'delivered'; }), 'customerId');
+  // The small "2 girvi / 1 order" tags: two columns of each tab are enough.
+  var openLoans = countBy_(readCols_('Loans', ['customerId', 'status']).filter(function (l) { return l.status === 'open'; }), 'customerId');
+  var openOrders = countBy_(readCols_('Orders', ['customerId', 'status']).filter(function (o) { return o.status !== 'delivered' && o.status !== 'cancelled'; }), 'customerId');
+  var openRepairs = countBy_(readCols_('Repairs', ['customerId', 'status']).filter(function (r) { return r.status !== 'delivered'; }), 'customerId');
   var villages = {};
   list.forEach(function (c) { if (c.village) villages[c.village] = (villages[c.village] || 0) + 1; });
   return {
@@ -243,32 +246,52 @@ function customerGet_(id) {
   req_(c, 'Customer not found');
   var t = today_();
   var opts = { formula: formula_('formula_interest'), minDays: num_(settings_().interest_min_days) };
-  var loans = where_('Loans', function (l) { return l.customerId === id; }).map(function (l) {
-    var st = l.status === 'open' ? Calc.loanStatement(l, loanTxns_(l.id), t, opts) : null;
+  var mine = function (x) { return x === id; };
+  // Only this customer's rows are read from each tab (see rowsMatching_), not the whole shop's history.
+  var myLoans = rowsMatching_('Loans', 'customerId', mine);
+  var openIds = {};
+  myLoans.forEach(function (l) { if (l.status === 'open') openIds[l.id] = 1; });
+  var txBy = {};
+  if (Object.keys(openIds).length) rowsMatching_('LoanTxns', 'loanId', function (x) { return openIds[x]; }).forEach(function (x) {
+    (txBy[x.loanId] = txBy[x.loanId] || []).push({ id: x.id, date: x.date, type: x.type, amount: num_(x.amount), interestPart: num_(x.interestPart),
+      principalPart: num_(x.principalPart), mode: x.mode, by: x.by, at: x.at });
+  });
+  var loans = myLoans.map(function (l) {
+    var st = l.status === 'open' ? Calc.loanStatement(l, txBy[l.id] || [], t, opts) : null;
     return {
       id: l.id, date: l.date, item: l.item, metal: l.metal, netWt: num_(l.netWt), principal: num_(l.principal),
       ratePct: num_(l.ratePct), status: l.status, closedAt: l.closedAt,
       days: st ? st.totalDays : null, totalDue: st ? st.totalDue : 0
     };
   });
-  var orders = where_('Orders', function (o) { return o.customerId === id; }).map(orderSummary_);
-  var repairs = where_('Repairs', function (r) { return r.customerId === id; });
-  var sales = where_('Sales', function (s) { return s.customerId === id; }).slice(-20).reverse().map(function (s) {
+  var myOrders = rowsMatching_('Orders', 'customerId', mine);
+  if (myOrders.length && !_rowsCache.OrderPayments) {
+    var oids = {};
+    myOrders.forEach(function (o) { oids[o.id] = 1; });
+    var pays = rowsMatching_('OrderPayments', 'orderId', function (x) { return oids[x]; });
+    _payIndex = { rows: null, n: -1, by: {}, partial: true };
+    pays.forEach(function (p) { (_payIndex.by[p.orderId] = _payIndex.by[p.orderId] || []).push(p); });
+  }
+  var orders = myOrders.map(orderSummary_);
+  if (_payIndex && _payIndex.partial) _payIndex = null;
+  var repairs = rowsMatching_('Repairs', 'customerId', mine);
+  var sales = rowsMatching_('Sales', 'customerId', mine).slice(-20).reverse().map(function (s) {
     return { id: s.id, billNo: s.billNo, type: s.type, date: s.date, net: num_(s.net), status: s.status };
   });
-  var oldGold = where_('OldGold', function (g) { return g.customerId === id; }).slice(-20).reverse().map(function (g) {
+  var oldGold = rowsMatching_('OldGold', 'customerId', mine).slice(-20).reverse().map(function (g) {
     return {
       id: g.id, date: g.date, item: g.item, metal: g.metal, weight: num_(g.weight), cutPct: num_(g.cutPct),
       customerFine: num_(g.customerFine), amount: num_(g.amount), status: g.status, source: g.source, billId: g.billId
     };
   });
+  var myDues = rowsMatching_('Dues', 'customerId', mine);
   var girviDue = loans.reduce(function (a, l) { return a + (l.status === 'open' ? l.totalDue : 0); }, 0);
   var advance = orders.reduce(function (a, o) { return a + (o.status !== 'delivered' && o.status !== 'cancelled' ? o.paid : 0); }, 0);
   return {
     customer: c, name: customerName_(c), loans: loans, orders: orders, repairs: repairs, sales: sales,
     oldGold: oldGold, girviDue: Math.round(girviDue), orderAdvance: Math.round(advance),
-    udhaar: customerUdhaar_(id),
-    dues: rows_('Dues').filter(function (x) { return x.customerId === id; }).slice(-20)
+    udhaar: round2_(myDues.reduce(function (a, x) { return a + num_(x.amount); }, 0)),
+    dues: myDues.slice(-20)
       .map(function (x) { return { date: x.date, amount: num_(x.amount), refType: x.refType }; })
   };
 }

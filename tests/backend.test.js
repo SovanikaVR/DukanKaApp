@@ -11,7 +11,7 @@ g.setSetting_('cash_opening_date', '2026-01-01');
 g.createUser_('Viju', 'viju', 'owner', '1234');
 
 function call(action, data, token) {
-  g._rowsCache = {};
+  g._rowsCache = {}; g._findCount = {};
   const res = g.doPost({ postData: { contents: JSON.stringify({ action, token, data }) } });
   return JSON.parse(res.text);
 }
@@ -221,6 +221,38 @@ test('import many customers with opening baki', () => {
   assert.strictEqual(ok('customers.import', { rows: [{ firstName: 'Suresh', mobile: '9822011111' }] }, T).added, 0);
 });
 
+test('read cache: a save refreshes only the screens that use what it changed', () => {
+  const ops = g._ops;
+  const reads = (fn) => { Object.keys(ops).forEach((k) => { ops[k] = 0; }); fn(); return ops.calls; };
+  const cust = ok('customers.search', { q: '' }, T).results[0];
+  const before = ok('loans.list', {}, T).length;
+  assert.strictEqual(reads(() => ok('loans.list', {}, T)), 0); // second time: from the cache, no sheet reads
+  ok('cash.add', { dir: 'out', mode: 'cash', amount: 50, notes: 'tea' }, T); // touches Cash only
+  assert.strictEqual(reads(() => ok('loans.list', {}, T)), 0); // girvi list still cached
+  assert.ok(reads(() => ok('cash.list', { from: '2026-10-08' }, T)) > 0); // cash book read fresh
+  ok('loans.create', { customerId: cust.id, item: 'Ring', metal: 'gold', purityPct: 91.6, grossWt: 3, netWt: 3, principal: 10000, ratePct: 2 }, T);
+  assert.strictEqual(ok('loans.list', {}, T).length, before + 1); // new girvi shows at once
+  // customer page built from that customer's rows only must match a full read
+  const p1 = ok('customers.get', { id: cust.id }, T);
+  g._rowsCache = {}; ['Loans', 'LoanTxns', 'Sales', 'Dues', 'Orders', 'OrderPayments', 'Repairs', 'OldGold'].forEach((n) => g.rows_(n));
+  const p2 = g.customerGet_(cust.id);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p1)).loans, JSON.parse(JSON.stringify(p2)).loans);
+  assert.strictEqual(p1.udhaar, p2.udhaar);
+  assert.strictEqual(p1.sales.length, p2.sales.length);
+});
+
+test('shop pictures travel once: bootstrap and bills carry only a reference', () => {
+  const png = 'data:image/png;base64,' + Buffer.from('fake-logo-bytes').toString('base64');
+  ok('settings.save', { shop_logo: png }, T);
+  const ref = ok('bootstrap', {}, T).settings.shop_logo;
+  assert.ok(/^img:/.test(ref));
+  assert.strictEqual(ok('settings.images', {}, T)[ref], png);
+  ok('settings.save', { shop_logo: ref, shop_name: 'Test Jewellers' }, T); // sent back unchanged: picture kept
+  assert.strictEqual(ok('settings.images', {}, T)[ref], png);
+  const bill = ok('sale.list', {}, T)[0];
+  assert.ok(/^img:/.test(ok('sale.get', { id: bill.id }, T).shop.logo));
+});
+
 test('reports', () => {
   const d = ok('reports.daily', { date: '2026-10-08' }, T);
   assert.strictEqual(d.sales.count, 2);
@@ -243,6 +275,28 @@ test('roles: employee cannot change settings, viewer cannot write', () => {
   assert.ok(/View-only/.test(call('customers.save', { firstName: 'X' }, V).error));
   ok('reports.daily', {}, V);
   assert.ok(/owner/.test(call('users.save', { id: 'x', active: false }, E).error));
+});
+
+test('security: PIN lockout, owner PIN length, log out all phones, owner-only exports', () => {
+  // 5 wrong PINs lock the login (kept in Script Properties, not the cache)
+  for (let i = 0; i < 5; i++) assert.ok(/Wrong/.test(call('auth.login', { username: 'ravi', pin: '0000' }).error));
+  assert.ok(/Too many wrong PINs/.test(call('auth.login', { username: 'ravi', pin: '5678' }).error)); // even the right PIN waits
+  Object.keys(g._cache).forEach((k) => delete g._cache[k]); // cache emptied by Google: still locked
+  assert.ok(/Too many/.test(call('auth.login', { username: 'ravi', pin: '5678' }).error));
+  const ravi = ok('users.list', {}, T).find((u) => u.username === 'ravi');
+  ok('users.save', { id: ravi.id, pin: '4321' }, T); // owner sets a new PIN: unlocked
+  const E = ok('auth.login', { username: 'ravi', pin: '4321' }).token;
+  // owner PIN must be 6+ digits
+  assert.ok(/at least 6/.test(call('users.save', { name: 'Co', username: 'co', role: 'owner', pin: '1234' }, T).error));
+  assert.ok(/at least 6/.test(call('users.save', { id: ravi.id, role: 'owner', pin: '9876' }, T).error));
+  // exports: owner only
+  assert.ok(/owner/.test(call('export.list', { module: 'customers' }, E).error));
+  ok('export.list', { module: 'customers' }, T);
+  // log out all other phones
+  assert.ok(/owner/.test(call('auth.logoutAll', {}, E).error));
+  assert.ok(ok('auth.logoutAll', {}, T).loggedOut >= 1);
+  assert.ok(call('customers.search', { q: '' }, E).error === 'SESSION_EXPIRED');
+  ok('customers.search', { q: '' }, T); // the owner's own phone stays in
 });
 
 test('formula editing is validated', () => {
@@ -321,7 +375,7 @@ test('owner can correct and cancel old records', () => {
   assert.strictEqual(ok('cash.list', {}, T).closing, before + 777);
   const o = ok('orders.create', { customerId: c.id, method: 'A', estWt: 5, rate: 10000, makingPerG: 100 }, T);
   assert.strictEqual(ok('orders.edit', { id: o.id, estWt: 6 }, T).estTotal, 60600);
-  const E = ok('auth.login', { username: 'ravi', pin: '5678' }).token;
+  const E = ok('auth.login', { username: 'ravi', pin: '4321' }).token;
   assert.ok(/owner/.test(call('cash.void', { id: e.id }, E).error));
 });
 
@@ -383,7 +437,7 @@ test('QA round: money stays consistent in the tricky cases', () => {
   // an advance to a karigar is allowed
   ok('parties.entry', { partyId: k.id, type: 'pay_labour', cash: 500 }, T);
   // employees do not see cost / profit
-  const E = ok('auth.login', { username: 'ravi', pin: '5678' }).token;
+  const E = ok('auth.login', { username: 'ravi', pin: '4321' }).token;
   assert.strictEqual(ok('reports.daily', {}, E).profit, null);
   assert.strictEqual(ok('reports.daily', {}, T).profit !== null, true);
 });
@@ -416,8 +470,8 @@ test('bills like the sample: making %, gross weight, own bill no, note, print op
     assert.ok(r.columns.length && Array.isArray(r.rows), m);
     r.rows.forEach((row) => assert.strictEqual(row.length, r.columns.length, m));
   }
-  const E = ok('auth.login', { username: 'ravi', pin: '5678' }).token;
-  assert.ok(!ok('export.list', { module: 'stock', status: 'all' }, E).columns.includes('Our cost ₹'));
+  const E = ok('auth.login', { username: 'ravi', pin: '4321' }).token;
+  assert.ok(/owner/.test(call('export.list', { module: 'stock', status: 'all' }, E).error)); // staff cannot take lists out
 });
 
 test('bill designer: design saved per bill type and sent with the bill', () => {

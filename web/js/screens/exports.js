@@ -1,6 +1,7 @@
 /* Exports: all bills of a period as PDF (one tap), and any list as an Excel (.xlsx) file or a PDF. */
+import { ensureImages } from '../images.js';
 import { call } from '../api.js';
-import { S, isViewer } from '../state.js';
+import { S, isViewer, isOwner } from '../state.js';
 import { h, screen, field, card, seg, busy, toast, inr, fdate, todayStr, modal, icon } from '../ui.js';
 import { xlsxBlob, xlsxBook } from '../xlsx.js';
 import { invoiceHtml, pdfBlob, manyDocs } from '../bill.js';
@@ -60,7 +61,8 @@ export const exportCsv = (module, params) => exportList(module, params, 'xlsx');
 
 /** "⬇" button for a list screen: asks Excel or PDF. getParams() gives {from, to, status…} at the moment of tapping. */
 export function exportCsvButton(module, getParams) {
-  if (isViewer() && module === 'stock') return null;
+  // Whole lists (customers with mobiles, girvi, baki…) leave the app only through the owner.
+  if (!isOwner()) return null;
   return h('button', { class: 'help-btn', type: 'button', 'aria-label': t('Export'), title: t('Export'), onclick: async () => {
     const kind = await modal(t('Export this list'), h('div', { class: 'hint' }, t('Excel opens in Excel / Google Sheets. PDF is for printing or sending.')),
       [{ label: 'Excel', value: 'xlsx' }, { label: 'PDF', value: 'pdf' }]);
@@ -95,6 +97,7 @@ export async function bills(params, query) {
   const run = h('button', { class: 'btn', onclick: () => busy(run, async () => {
     status.replaceChildren(h('div', { class: 'hint' }, t('Getting the bills…')));
     const r = await call('sale.export', { from: from.input.value, to: to.input.value, type, withCancelled });
+    await ensureImages((r.bills || r.list || []).flatMap((x) => (x && x.shop ? [x.shop.logo, x.shop.picRight] : [])));
     if (!r.bills.length) { status.replaceChildren(h('div', { class: 'hint' }, t('No bills in this period'))); return; }
     // Big periods are split into a few PDFs so the phone does not run out of memory.
     const per = paper === 'a5' ? 60 : 40;

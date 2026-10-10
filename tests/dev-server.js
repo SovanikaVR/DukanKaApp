@@ -24,7 +24,7 @@ const server = http.createServer((req, res) => {
     req.on('end', () => {
       // DELAY=3000 makes every API answer slow, like a weak mobile network or a cold Apps Script.
       setTimeout(() => {
-        g._rowsCache = {};
+        g._rowsCache = {}; g._findCount = {};
         const out = g.doPost({ postData: { contents: body } });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(out.text);

@@ -1,6 +1,7 @@
 /* Bill designer (owner): the shop designs its own GST bill and quotation, with a live preview.
  * Start from a ready design (bill book / tax invoice / classic / simple), then change colours, the top of the bill,
  * pictures, columns (on/off, order, own names), totals, and the bottom (terms, rule line, thank-you line). */
+import { ensureImages, imgSrc } from '../images.js';
 import { call } from '../api.js';
 import { S, isOwner, refresh } from '../state.js';
 import { h, screen, field, card, grid, seg, busy, toast, sec, go } from '../ui.js';
@@ -13,6 +14,7 @@ const OTHER_FIELDS = ['billNo', 'purityInName', 'words', 'payment', 'oldGold', '
 export async function render() {
   if (!isOwner()) return screen(t('Bill designer'), null, [h('div', { class: 'hint' }, t('Only the owner can change the bill design.'))]);
   const s = S.settings;
+  await ensureImages();
   const vals = Object.assign({}, s); // every setting this screen changes, saved together
   const parse = (v, d) => { try { return v ? JSON.parse(v) : d; } catch (e) { return d; } };
   const designs = {
@@ -79,7 +81,7 @@ export async function render() {
     return h('label', { class: 'check-row' }, cb, h('span', { class: 'grow' }, t(label)));
   };
   const picture = (key, label) => {
-    const img = h('img', { class: 'logo-prev', alt: '', src: vals[key] || undefined });
+    const img = h('img', { class: 'logo-prev', alt: '', src: imgSrc(vals[key]) || undefined });
     const input = h('input', { type: 'file', accept: 'image/*', class: 'hidden' });
     input.addEventListener('change', async () => {
       const file = input.files && input.files[0];

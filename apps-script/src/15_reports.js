@@ -3,7 +3,9 @@
 function reportDaily_(date) {
   date = readDate_(date);
   var rate = rateOn_(date) || { g24: 0 };
-  var sales = rows_('Sales').filter(function (b) { return b.date === date && b.status !== 'void'; });
+  var on = function (x) { return x === date; };
+  // One day's rows only (rowsMatching_ reads the date column, then just that day's rows).
+  var sales = rowsMatching_('Sales', 'date', on).filter(function (b) { return b.status !== 'void'; });
   var salesTotal = 0, salesProfit = 0, taxTotal = 0, unknownCostLines = 0;
   sales.forEach(function (b) {
     salesTotal += num_(b.invoiceTotal);
@@ -14,15 +16,14 @@ function reportDaily_(date) {
     });
   });
   var interest = 0, loansClosed = 0;
-  rows_('LoanTxns').forEach(function (t) {
-    if (t.date !== date) return;
+  rowsMatching_('LoanTxns', 'date', on).forEach(function (t) {
     interest += num_(t.interestPart);
     if (t.type === 'close') loansClosed++;
   });
-  var newLoans = rows_('Loans').filter(function (l) { return l.date === date && l.status !== 'void'; });
-  var repairs = rows_('Repairs').filter(function (r) { return r.deliveredAt === date; });
+  var newLoans = rowsMatching_('Loans', 'date', on).filter(function (l) { return l.status !== 'void'; });
+  var repairs = rowsMatching_('Repairs', 'deliveredAt', on);
   var repairProfit = repairs.reduce(function (a, r) { return a + num_(r.custCharge) - num_(r.karigarCost); }, 0);
-  var delivered = rows_('Orders').filter(function (o) { return o.deliveredAt === date && o.status === 'delivered'; });
+  var delivered = rowsMatching_('Orders', 'deliveredAt', on).filter(function (o) { return o.status === 'delivered'; });
   // Making profit = making charged to the customer − labour actually booked to the karigar for that order.
   var labourOf = {};
   rows_('PartyLedger').forEach(function (e) {
@@ -35,13 +36,13 @@ function reportDaily_(date) {
   var meltGain = melts.reduce(function (a, m) {
     return a + num_(m.actualFine) * num_(m.metal === 'silver' ? rate.silver : rate.g24) - num_(m.paidAmount) - num_(m.cost);
   }, 0);
-  var cashEntries = rows_('Cash').filter(function (c) { return c.date === date; });
+  var cashEntries = rowsMatching_('Cash', 'date', on);
   var expenses = cashEntries.filter(function (c) { return c.dir === 'out' && c.category === 'expense'; })
     .reduce(function (a, c) { return a + num_(c.amount); }, 0);
   var otherIncome = cashEntries.filter(function (c) { return c.dir === 'in' && c.category === 'other-income'; })
     .reduce(function (a, c) { return a + num_(c.amount); }, 0);
-  var oldBought = rows_('OldGold').filter(function (g) { return g.date === date && g.status !== 'void'; });
-  var booked = rows_('Orders').filter(function (o) { return o.date === date && o.status !== 'cancelled'; });
+  var oldBought = rowsMatching_('OldGold', 'date', on).filter(function (g) { return g.status !== 'void'; });
+  var booked = rowsMatching_('Orders', 'date', on).filter(function (o) { return o.status !== 'cancelled'; });
   var cash = cashList_({ from: date, to: date });
   // Optional (Settings): GST under reverse charge on old gold bought from customers, for the shop's accountant.
   var rcmOn = settings_().oldgold_rcm === 'true';
@@ -77,6 +78,8 @@ function reportMonth_(month) {
   var days = new Date(y, m, 0).getDate();
   var t = today_();
   var out = [], total = 0;
+  // A whole month: read each tab once and work every day from memory.
+  ['Sales', 'LoanTxns', 'Loans', 'Repairs', 'Orders', 'Cash', 'OldGold', 'PartyLedger', 'Melts'].forEach(function (n) { rows_(n); });
   var parts = { sales: 0, interest: 0, repair: 0, making: 0, melting: 0, other: 0, expenses: 0 };
   for (var d = 1; d <= days; d++) {
     var date = month + '-' + String(d).padStart(2, '0');

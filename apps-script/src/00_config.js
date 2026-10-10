@@ -7,7 +7,7 @@
  * apps-script/src/, not dist/Code.gs.
  */
 
-var APP_VERSION = '1.8.0';
+var APP_VERSION = '1.9.0';
 
 /** Sheet (tab) name -> column headers. The first column is always the row id. */
 var SCHEMA = {
@@ -112,5 +112,5 @@ var DEFAULT_SETTINGS = {
 var OWNER_ONLY = {
   'settings.save': 1, 'users.list': 1, 'users.save': 1, 'sale.void': 1, 'cash.opening': 1,
   'admin.archive': 1, 'admin.backupNow': 1, 'loans.edit': 1, 'loans.void': 1,
-  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'admin.check': 1, 'stock.update': 1, 'dues.adjust': 1, 'customers.import': 1
+  'loans.undoLast': 1, 'orders.edit': 1, 'repairs.edit': 1, 'cash.void': 1, 'admin.check': 1, 'stock.update': 1, 'dues.adjust': 1, 'customers.import': 1, 'auth.logoutAll': 1, 'export.list': 1
 };

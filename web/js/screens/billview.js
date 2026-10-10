@@ -1,4 +1,5 @@
 /* A saved bill (preview + send/print) and the bills list. */
+import { ensureImages } from '../images.js';
 import { call } from '../api.js';
 import { isOwner, isViewer } from '../state.js';
 import { h, screen, field, busy, toast, inr, fdate, empty, go, confirmBox, seg, card, miniLoading } from '../ui.js';
@@ -8,6 +9,7 @@ import { t } from '../i18n.js';
 
 export async function render({ id }, query) {
   const b = await call('sale.get', { id, fy: query.fy || '' });
+  await ensureImages([b.shop && b.shop.logo, b.shop && b.shop.picRight]); // a picture changed on another phone
   const preview = h('div', { class: 'paper' });
   const wrap = h('div', { class: 'paper-wrap' }, preview);
   let size = (() => { try { return localStorage.getItem('dk_paper') || 'a4'; } catch (e) { return 'a4'; } })();

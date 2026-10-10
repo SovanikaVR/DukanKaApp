@@ -7,6 +7,7 @@
  */
 function doPost(e) {
   var out;
+  _findCount = {}; _colsCache = {}; // per request
   finishInstall_(); // a shop made by the one-link installer finishes itself on first use (no-op afterwards)
   try {
     var body = json_(e && e.postData && e.postData.contents, {});
@@ -31,7 +32,9 @@ function doGet(e) {
 var ROUTES = {
   'ping': function () { return { app: 'DukanKaApp', version: APP_VERSION, shop: settings_().shop_name }; },
   'bootstrap': function (u) { return bootstrap_(u); },
+  'settings.images': function () { return settingsImages_(); },
   'auth.logout': function (u, d, token) { return logout_(token); },
+  'auth.logoutAll': function (u, d, token) { return logoutAll_(u, token); },
   'settings.save': function (u, d) { return settingsSave_(u, d); },
   'users.list': function () { return usersList_(); },
   'users.save': function (u, d) { return usersSave_(u, d); },
@@ -100,7 +103,7 @@ var ROUTES = {
 };
 
 var READ_ONLY = {
-  'ping': 1, 'bootstrap': 1, 'rates.list': 1, 'customers.search': 1, 'customers.get': 1, 'sale.list': 1,
+  'ping': 1, 'bootstrap': 1, 'settings.images': 1, 'rates.list': 1, 'customers.search': 1, 'customers.get': 1, 'sale.list': 1,
   'sale.get': 1, 'oldgold.list': 1, 'loans.list': 1, 'loans.get': 1, 'orders.list': 1, 'orders.get': 1,
   'repairs.list': 1, 'stock.list': 1, 'stock.summary': 1, 'stock.photo': 1, 'melt.list': 1, 'fine.summary': 1,
   'parties.list': 1, 'parties.ledger': 1, 'cash.list': 1, 'reports.daily': 1, 'reports.month': 1,
@@ -127,9 +130,9 @@ function handle_(action, token, data) {
       var prev = cache.get(rid);
       if (prev) return json_(prev, {});
     }
+    _written = {};
     migrateDues_();
     var result = fn(user, data, token);
-    bumpDataVersion_();
     if (cache) {
       try {
         var str = JSON.stringify(result === undefined ? {} : result);
@@ -140,14 +143,29 @@ function handle_(action, token, data) {
     return result;
   } finally {
     SpreadsheetApp.flush();
+    // Even a save that stopped half way may have written something: those tabs are read fresh next time.
+    bumpTabVersions_(Object.keys(_written));
     lock.releaseLock();
   }
+}
+
+/* Shop pictures (logo, quotation logo, BIS logo) are up to 45 KB each. They are sent once and kept on the phone;
+ * every other answer carries only a short reference like "img:Ab12…". */
+var IMAGE_KEYS = ['shop_logo', 'quote_logo', 'bill_pic_right'];
+function imgRef_(v) {
+  if (!v) return '';
+  return 'img:' + cacheKey_(String(v)).slice(0, 16);
+}
+function settingsImages_() {
+  var s = settings_(), out = {};
+  IMAGE_KEYS.forEach(function (k) { if (s[k]) out[imgRef_(s[k])] = s[k]; });
+  return out;
 }
 
 function bootstrap_(user) {
   var s = settings_();
   var clean = {};
-  Object.keys(s).forEach(function (k) { if (k.indexOf('counter_') !== 0) clean[k] = s[k]; });
+  Object.keys(s).forEach(function (k) { if (k.indexOf('counter_') !== 0 && k !== 'photo_folder') clean[k] = IMAGE_KEYS.indexOf(k) >= 0 ? imgRef_(s[k]) : s[k]; });
   return {
     user: publicUser_(user),
     settings: clean,
@@ -163,10 +181,11 @@ function hideCost_(user, bill) {
   return bill;
 }
 
-/* ---------- Read cache: the "index" that makes repeated screens instant ----------
- * Reading big sheets is the slow part. Every answer to a read is kept in CacheService for 10 minutes,
- * filed under the current "data version". Any save changes the version, so after a save every screen
- * is read fresh; until then the same screen comes back in a few milliseconds without opening the sheet. */
+/* ---------- Read cache: repeated screens come back in milliseconds ----------
+ * Every answer to a read is kept in CacheService for 10 minutes, together with the list of tabs it was made from.
+ * Each tab has its own version; a save bumps only the tabs it wrote. So saving a bill (Sales, Cash) does not throw
+ * away the girvi list or the stock screen — only answers that used those tabs are worked out again.
+ * dataver is a global version on top, for rare full changes (restore from backup, updates). */
 
 function dataVersion_() {
   var c = CacheService.getScriptCache();
@@ -177,24 +196,58 @@ function dataVersion_() {
 function bumpDataVersion_() {
   try { CacheService.getScriptCache().put('dataver', String(Date.now()) + Math.random().toString(36).slice(2, 6), 21600); } catch (e) { /* ignore */ }
 }
+function stamp_() { return String(Date.now()) + Math.random().toString(36).slice(2, 6); }
+
+/** After a save: new versions for the tabs it wrote (one cache call). */
+function bumpTabVersions_(names) {
+  if (!names.length) return;
+  var put = {};
+  names.forEach(function (n) { put['sv_' + n] = stamp_(); });
+  try { CacheService.getScriptCache().putAll(put, 21600); } catch (e) { bumpDataVersion_(); }
+}
+
+/** Current versions of some tabs. A version that is missing (never saved, or dropped from the cache) gets a new
+ *  random one, so an old answer can never match by accident. */
+function tabVersions_(cache, names) {
+  var keys = names.map(function (n) { return 'sv_' + n; });
+  var got = keys.length ? cache.getAll(keys) || {} : {};
+  var missing = {};
+  keys.forEach(function (k) { if (!got[k]) { got[k] = stamp_(); missing[k] = got[k]; } });
+  if (Object.keys(missing).length) cache.putAll(missing, 21600);
+  return names.map(function (n) { return n + ':' + got['sv_' + n]; }).join(',');
+}
 
 var NO_READ_CACHE = { 'ping': 1, 'auth.logout': 1, 'admin.check': 1, 'stock.photo': 1 };
+
+function cacheKey_(raw) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, raw, Utilities.Charset.UTF_8));
+}
 
 function cachedRead_(action, user, data, run) {
   if (NO_READ_CACHE[action]) return run();
   var cache = CacheService.getScriptCache();
-  var key;
+  var base, metaKey;
   try {
-    var raw = [dataVersion_(), user.id, user.role, today_(), action, JSON.stringify(data || {})].join('|');
-    key = 'rc_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, raw, Utilities.Charset.UTF_8));
-    var hit = cache.get(key);
-    if (hit) return JSON.parse(hit);
-  } catch (e) { key = null; }
+    base = [dataVersion_(), user.id, user.role, today_(), action, JSON.stringify(data || {})].join('|');
+    metaKey = 'rm_' + cacheKey_(base);
+    var deps = json_(cache.get(metaKey), null);
+    if (deps) {
+      var hit = cache.get('rc_' + cacheKey_(base + '|' + tabVersions_(cache, deps)));
+      if (hit) return JSON.parse(hit);
+    }
+  } catch (e) { base = null; }
+  _touched = {};
   var result = run();
-  if (key) {
+  if (base) {
     try {
+      var used = Object.keys(_touched).sort();
       var str = JSON.stringify(result === undefined ? null : result);
-      if (str.length * 3 < 95000) cache.put(key, str, 600);
+      if (str.length * 3 < 95000) {
+        var put = {};
+        put[metaKey] = JSON.stringify(used);
+        put['rc_' + cacheKey_(base + '|' + tabVersions_(cache, used))] = str;
+        cache.putAll(put, 600);
+      }
     } catch (e2) { /* too big or cache full: fine */ }
   }
   return result;

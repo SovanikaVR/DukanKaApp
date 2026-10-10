@@ -28,7 +28,7 @@ export function onSessionExpired(fn) { onExpired = fn; }
 export class ApiError extends Error {}
 
 /** Actions that only read. Everything else is a save and gets a request id. */
-const READS = new Set(['ping', 'bootstrap', 'rates.list', 'customers.search', 'customers.get', 'sale.list', 'sale.get',
+const READS = new Set(['ping', 'bootstrap', 'settings.images', 'rates.list', 'customers.search', 'customers.get', 'sale.list', 'sale.get',
   'oldgold.list', 'loans.list', 'loans.get', 'orders.list', 'orders.get', 'repairs.list', 'stock.list', 'stock.summary', 'stock.photo',
   'melt.list', 'fine.summary', 'parties.list', 'parties.ledger', 'cash.list', 'reports.daily', 'reports.month',
   'reports.position', 'users.list', 'dues.list', 'home.summary', 'auth.login', 'auth.logout']);
@@ -63,7 +63,7 @@ async function post(target, payload, ms) {
 /* ---------- Instant screens: answers to reads are kept on the phone ----------
  * A screen opened again shows the saved answer at once, while the fresh one is fetched in the background.
  * If the fresh answer is different, 'dk-fresh' is sent and the screen redraws itself. Any save clears this. */
-const NO_KEEP = new Set(['ping', 'auth.login', 'auth.logout', 'bootstrap', 'export.list', 'sale.export', 'stock.photo']);
+const NO_KEEP = new Set(['ping', 'auth.login', 'auth.logout', 'bootstrap', 'settings.images', 'export.list', 'sale.export', 'stock.photo']);
 const KEEP_MS = 30 * 60 * 1000;
 const kept = new Map();
 const keepKey = (action, data) => token().slice(-8) + '|' + action + '|' + JSON.stringify(data || {}); // per login: never shows one user's data to another
@@ -83,6 +83,14 @@ function persistKept() {
     } catch (e) { try { localStorage.removeItem('dk_kept'); } catch (x) { /* ignore */ } }
   }, 500);
 }
+/** After logging out (or being logged out) nothing of the shop stays on this phone: saved screens, recent customers, pictures. */
+export function wipeLocal() {
+  try {
+    Object.keys(localStorage).forEach((k) => { if (/^dk_/.test(k) && !['dk_api', 'dk_lang', 'dk_paper', 'dk_thermal', 'dk_token'].includes(k)) localStorage.removeItem(k); });
+  } catch (e) { /* ignore */ }
+  kept.clear();
+}
+
 export function forgetKept() { kept.clear(); try { localStorage.removeItem('dk_kept'); } catch (e) { /* ignore */ } }
 
 export async function call(action, data = {}, url) {

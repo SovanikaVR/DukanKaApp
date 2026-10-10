@@ -203,7 +203,7 @@ Both ways are free. Fully automatic sending would need the paid WhatsApp Busines
 **Backend — automatic (default)**
 - Bump `APP_VERSION` in `apps-script/src/00_config.js`, run `npm run build`, and push `dist/` to `main`.
 - Every night (after the backup) each shop downloads
-  `https://raw.githubusercontent.com/SovanikaVR/DukanKaApp/main/dist/Code.gs` and `dist/appsscript.json`.
+  `https://raw.githubusercontent.com/SovanikaVR/DukanKaApp/stable/dist/Code.gs` and `dist/appsscript.json`.
   If the version there is newer, it replaces its own code through the Apps Script API, makes a new version
   and moves its web app to it. **The web app URL stays the same.** New tabs or settings are added the next night.
 - Each result is written to the **Audit** tab (action `auto.update`).

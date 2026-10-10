@@ -16,7 +16,8 @@ function noteOf(x) {
 }
 
 export async function render(params, query) {
-  const d = await call('dues.list', { q: query.q || '' });
+  const limit = parseInt(query.limit, 10) || 100;
+  const d = await call('dues.list', Object.assign({ q: query.q || '' }, limit !== 100 ? { limit } : {}));
   const q = field(t('Search name or mobile'), { value: query.q || '' });
   q.input.addEventListener('change', () => go('dues?q=' + encodeURIComponent(q.input.value.trim()), { replace: true }));
 
@@ -44,7 +45,8 @@ export async function render(params, query) {
     h('div', { class: 'hint' }, t('Everyone who still has to pay the shop. Money left unpaid on a bill, order, repair or girvi comes here by itself. When the full amount is paid, the name goes off this list.')),
     q,
     card(h('div', { class: 'due-total' }, h('span', { class: 'muted' }, t('Total baki')), h('span', { class: 'big bad' }, inr(d.total)))),
-    rows.length ? rows : empty(t('Nobody owes anything. 👍'))
+    rows.length ? rows : empty(t('Nobody owes anything. 👍')),
+    d.more ? h('button', { class: 'btn2', onclick: () => go('dues?limit=' + (limit + 200) + (query.q ? '&q=' + encodeURIComponent(query.q) : ''), { replace: true }) }, t('Show more') + ' (' + (d.count - d.list.length) + ')') : null
   ], null, { right: exportCsvButton('dues', () => ({})) });
 }
 

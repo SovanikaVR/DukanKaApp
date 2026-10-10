@@ -1,7 +1,7 @@
 /* Settings: shop details & GSTIN, standard values, modules on/off, formulas, users, app. */
 import { call, apiUrl } from '../api.js';
 import { S, isOwner, refresh, modules } from '../state.js';
-import { h, screen, field, card, grid, seg, busy, toast, sec, go, ask, num } from '../ui.js';
+import { h, screen, field, card, grid, seg, busy, toast, sec, go, ask, num, confirmBox } from '../ui.js';
 import { getLang, setLang, t } from '../i18n.js';
 import { BAKI_DEFAULT } from '../baki.js';
 
@@ -101,7 +101,7 @@ export async function render() {
     h('button', { class: 'link', onclick: () => editUser(u) }, u.role));
   const addUser = async () => {
     const v = await ask('Add user', [{ key: 'name', label: 'Name', value: '' }, { key: 'username', label: 'Login name', value: '' },
-      { key: 'pin', label: '4–8 digit PIN', type: 'num', value: '' },
+      { key: 'pin', label: 'PIN: 4–8 digits (owner: 6–8)', type: 'num', value: '' },
       { key: 'role', label: 'Role', options: [{ value: 'employee', label: 'Employee' }, { value: 'owner', label: 'Owner' }, { value: 'viewer', label: 'View only' }], value: 'employee' }]);
     if (v) await busy(null, async () => { await call('users.save', v); toast('User added'); go('settings'); });
   };
@@ -111,6 +111,10 @@ export async function render() {
       { key: 'active', label: 'Can log in', options: [{ value: true, label: 'Yes' }, { value: false, label: 'No (switched off)' }], value: u.active },
       { key: 'pin', label: 'New PIN (blank = keep)', type: 'num', value: '' }]);
     if (v) await busy(null, async () => { await call('users.save', Object.assign({ id: u.id }, v)); toast('Saved'); go('settings'); });
+  };
+  const logoutAll = async () => {
+    if (!await confirmBox(t('Log out all other phones'), t('Every other phone must log in again with its PIN. This phone stays logged in.'), t('Log out all'))) return;
+    await busy(null, async () => { const r = await call('auth.logoutAll'); toast(r.loggedOut + ' ' + t('phones logged out')); });
   };
   const archive = async () => {
     const v = await ask('Move a finished year to its own file', [{ key: 'fy', label: 'Year (e.g. 25-26)', value: '' }], 'Move bills');
@@ -138,7 +142,9 @@ export async function render() {
       h('div', { class: 'hint' }, t('In an exchange, GST is charged on the full price of the new jewellery (old gold is not deducted before GST). Gold bought from a private person is normally not taxed; confirm with your CA.'))),
     sec('MODULES · switch off what this shop does not use'), card(modBoxes, h('div', { class: 'hint' }, 'Switched-off modules hide from the app; their data stays safe.')),
     sec('FORMULAS · old entries keep the formula they were made with'), formulaEls,
-    sec('USERS'), card(users.map(userRow), h('button', { class: 'btn2 small', onclick: addUser }, '+ Add user')),
+    sec('USERS'), card(users.map(userRow), h('button', { class: 'btn2 small', onclick: addUser }, '+ Add user'),
+      h('button', { class: 'btn2 small', onclick: logoutAll }, t('Log out all other phones')),
+      h('div', { class: 'hint' }, t('Use this if a phone is lost or a staff member leaves. Owner PIN: at least 6 digits. 5 wrong PINs lock that login and email you.'))),
     sec('THIS PHONE'), personal,
     sec('DATA'), card(h('div', { class: 'hint' }, 'Shop link: ' + apiUrl()),
       h('div', { class: 'grid g2' }, h('button', { class: 'btn2 small', onclick: backup }, 'Back up now'),

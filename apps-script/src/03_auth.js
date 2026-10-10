@@ -30,24 +30,70 @@ function createUser_(name, username, role, pin) {
   });
 }
 
+/* Wrong-PIN protection. Kept in Script Properties (not the cache, which Google may empty), per login name:
+ * 5 wrong PINs → locked 15 minutes; every further 5 → twice as long (up to 24 hours). The owner is emailed.
+ * The owner can unlock a user by setting a new PIN (Settings → Users, or the sheet menu "Reset an owner PIN"). */
+var LOCK_AFTER = 5;
+function loginFails_(username) {
+  return json_(PropertiesService.getScriptProperties().getProperty('lf_' + username), { n: 0, until: 0 });
+}
+function clearLoginFails_(username) {
+  try { PropertiesService.getScriptProperties().deleteProperty('lf_' + String(username || '').toLowerCase()); } catch (e) { /* ignore */ }
+}
+
 function login_(data) {
-  var username = String(data.username || '').trim().toLowerCase();
-  var cache = CacheService.getScriptCache();
-  var failKey = 'fail_' + username;
-  var fails = num_(cache.get(failKey));
-  if (fails >= 5) throw new Error('Too many wrong PINs. Try again after 10 minutes.');
+  var username = String(data.username || '').trim().toLowerCase().slice(0, 60);
+  req_(username, 'Wrong username or PIN');
+  var props = PropertiesService.getScriptProperties();
+  var f = loginFails_(username);
+  if (f.until > Date.now()) {
+    var mins = Math.ceil((f.until - Date.now()) / 60000);
+    throw new Error('Too many wrong PINs. Try again after ' + (mins > 90 ? Math.ceil(mins / 60) + ' hours' : mins + ' minutes') + ', or ask the owner to set a new PIN.');
+  }
   var u = findUser_(username);
   if (!u || u.active !== 'true' || hashPin_(u.salt, String(data.pin || '')) !== u.pinHash) {
-    cache.put(failKey, String(fails + 1), 600);
+    f.n = (f.n || 0) + 1;
+    if (f.n % LOCK_AFTER === 0) {
+      f.until = Date.now() + Math.min(15 * 60000 * Math.pow(2, f.n / LOCK_AFTER - 1), 86400000);
+      alertOwnerLogin_(username, f.n);
+    }
+    props.setProperty('lf_' + username, JSON.stringify(f));
+    audit_(null, 'login.failed', username, { fails: f.n });
     throw new Error('Wrong username or PIN');
   }
-  cache.remove(failKey);
+  if (f.n) props.deleteProperty('lf_' + username);
   var token = Utilities.getUuid() + Utilities.getUuid();
   var props = PropertiesService.getScriptProperties();
   cleanSessions_(props);
   props.setProperty('s_' + token, JSON.stringify({ u: u.id, exp: Date.now() + SESSION_DAYS * 86400000 }));
   audit_(u, 'login', u.id, {});
   return { token: token, user: publicUser_(u) };
+}
+
+/** Emails the owner (nightly-report address, else the Google account) when a login gets locked. At most once an hour per name. */
+function alertOwnerLogin_(username, fails) {
+  try {
+    var cache = CacheService.getScriptCache();
+    if (cache.get('lfmail_' + username)) return;
+    cache.put('lfmail_' + username, '1', 3600);
+    var to = settings_().report_email || Session.getEffectiveUser().getEmail();
+    if (!to) return;
+    MailApp.sendEmail(to, 'DukanKaApp: wrong PINs for "' + username + '"',
+      fails + ' wrong PIN tries for the login name "' + username + '" on ' + settings_().shop_name + '. The login is locked for a while.\n\n' +
+      'If this was not you or your staff, change that PIN in the app (Settings → Users) and use "Log out all phones".');
+  } catch (e) { /* email is best effort */ }
+}
+
+/** Owner: log out every phone (lost phone, staff left). Keeps the phone that asked. */
+function logoutAll_(user, token) {
+  var props = PropertiesService.getScriptProperties();
+  var all = props.getProperties();
+  var n = 0;
+  Object.keys(all).forEach(function (k) {
+    if (k.indexOf('s_') === 0 && k !== 's_' + token) { props.deleteProperty(k); n++; }
+  });
+  audit_(user, 'auth.logoutAll', '', { sessions: n });
+  return { loggedOut: n };
 }
 
 function cleanSessions_(props) {
@@ -98,6 +144,7 @@ function usersList_() {
 
 function usersSave_(user, d) {
   if (!d.id) {
+    req_((d.role || 'employee') !== 'owner' || String(d.pin || '').length >= 6, 'The owner PIN must be at least 6 digits');
     var nu = createUser_(d.name, d.username, d.role || 'employee', d.pin);
     audit_(user, 'user.add', nu.id, { username: nu.username, role: nu.role });
     return publicUser_(nu);
@@ -113,6 +160,7 @@ function usersSave_(user, d) {
   if (d.active !== undefined) patch.active = d.active ? 'true' : 'false';
   if (d.pin) {
     req_(/^\d{4,8}$/.test(String(d.pin)), 'PIN must be 4 to 8 digits');
+    req_((patch.role || u.role) !== 'owner' || String(d.pin).length >= 6, 'The owner PIN must be at least 6 digits');
     patch.salt = Utilities.getUuid();
     patch.pinHash = hashPin_(patch.salt, String(d.pin));
   }
@@ -126,6 +174,7 @@ function usersSave_(user, d) {
   var saved = update_('Users', u.id, patch);
   try { CacheService.getScriptCache().remove('u_' + u.id); } catch (e) { /* ignore */ }
   if (patch.active === 'false' || patch.pinHash) dropSessionsOf_(u.id);
+  if (patch.pinHash) clearLoginFails_(u.username);
   audit_(user, 'user.update', u.id, { name: patch.name, role: patch.role, active: patch.active, pin: !!d.pin });
   return publicUser_(saved);
 }

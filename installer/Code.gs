@@ -27,7 +27,7 @@
  * GitHub code.
  */
 
-var CODE_BASE_URL = 'https://raw.githubusercontent.com/SovanikaVR/DukanKaApp/main/dist/';
+var CODE_BASE_URL = 'https://raw.githubusercontent.com/SovanikaVR/DukanKaApp/stable/dist/';
 var APP_PAGE_URL = 'https://sovanikavr.github.io/DukanKaApp/';
 var SCRIPT_API = 'https://script.googleapis.com/v1/';
 var API_SETTINGS_URL = 'https://script.google.com/home/usersettings';

@@ -10,6 +10,8 @@ export async function refresh() {
   const b = await call('bootstrap');
   Object.assign(S, b);
   try { localStorage.setItem(CACHE, JSON.stringify(b)); } catch (e) { /* ignore */ }
+  // Shop pictures come separately and only when they changed (they are big).
+  import('./images.js').then((m) => m.ensureImages()).catch(() => {});
   return S;
 }
 

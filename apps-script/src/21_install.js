@@ -16,9 +16,11 @@
  * TRUST NOTE: auto-update downloads the backend from this GitHub repo and installs it in every
  * shop that has auto-update on. Whoever can push to the repo's main branch can change the code that
  * runs in every shop's Google account. Protect the branch (2-step login, no other writers).
+ * Shops update from the "stable" branch, not "main": new work reaches shops only after it is tested and
+ * "stable" is moved forward on purpose (git push origin main:stable).
  * A shop can turn it off: Dukan App → Auto-update on / off.
  */
-var UPDATE_BASE_URL = 'https://raw.githubusercontent.com/SovanikaVR/DukanKaApp/main/dist/';
+var UPDATE_BASE_URL = 'https://raw.githubusercontent.com/SovanikaVR/DukanKaApp/stable/dist/';
 var APP_PAGE_URL = 'https://sovanikavr.github.io/DukanKaApp/';
 var SCRIPT_API_URL = 'https://script.googleapis.com/v1/projects/';
 var API_SETTINGS_URL = 'https://script.google.com/home/usersettings';

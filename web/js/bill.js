@@ -1,6 +1,7 @@
 /* Bills and receipts: A4 / 58 mm / 80 mm layouts, print, PDF, WhatsApp. All free, all on the phone. */
 import { h, toast, fdate, g3, busy } from './ui.js';
 import { htmlPagesToPdf } from './pdf.js';
+import { imgSrc } from './images.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const m2 = (n) => Calc.inr(n, 2);
@@ -76,6 +77,15 @@ export function designFor(shop) {
   out.labels = d.labels && typeof d.labels === 'object' ? d.labels : {};
   const hex = (v, def) => (/^#[0-9a-fA-F]{6}$/.test(v || '') ? v : def);
   out.main = hex(out.main, base.main); out.soft = hex(out.soft, base.soft);
+  // Values that become class names: only the known choices (a saved design can never inject page code).
+  const pick = (v, list, def) => (list.includes(v) ? v : def);
+  out.header = pick(out.header, ['band', 'light', 'plain'], base.header);
+  out.font = pick(out.font, ['s', 'm', 'l'], base.font);
+  out.nameSize = pick(out.nameSize, ['m', 'l', 'xl'], base.nameSize);
+  out.rows = pick(out.rows, ['short', 'tall'], base.rows);
+  out.cust = pick(out.cust, ['lines', 'box'], base.cust);
+  out.totals = pick(out.totals, ['table', 'box'], base.totals);
+  out.titlePos = pick(out.titlePos, ['right', 'center'], base.titlePos);
   return out;
 }
 
@@ -113,12 +123,13 @@ function head(b, t, f, D) {
   const gst = b.type === 'GST';
   const phones = String(shop.phones || shop.mobile || '').split(/\n|,/).map((x) => x.trim()).filter(Boolean);
   const title = esc(gst ? t.taxTitle : (shop.title || 'QUOTATION'));
-  const left = D.picLeft && shop.logo ? `<img class="pic" src="${esc(shop.logo)}" alt="">` : '';
+  const logo = imgSrc(shop.logo), picR = imgSrc(shop.picRight);
+  const left = D.picLeft && logo ? `<img class="pic" src="${esc(logo)}" alt="">` : '';
   const right = [
     D.titlePos === 'right' ? `<div class="bh-title">${title}</div>` : '',
     gst && shop.gstin ? `<div><b>${t.gstin}: ${esc(shop.gstin)}</b></div>` : '',
     D.addressBand ? '' : phones.map((p) => `<div>${esc(p)}</div>`).join(''),
-    D.picRight && shop.picRight ? `<img class="pic r" src="${esc(shop.picRight)}" alt="">` : '',
+    D.picRight && picR ? `<img class="pic r" src="${esc(picR)}" alt="">` : '',
     shop.bis ? `<div class="sm">${t.lno}: ${esc(shop.bis)}</div>` : ''
   ].join('');
   return `<div class="bh">
@@ -202,7 +213,7 @@ function invoicePaper(b, paper) {
   const terms = lines(shop.terms);
   const cls = ['doc', 'bill', paper, 'hd-' + D.header, 'fs-' + D.font, 'ns-' + D.nameSize, D.frame ? 'frame' : '', D.addressBand ? 'ab' : ''].filter(Boolean).join(' ');
   return `<div class="${cls}" style="--m:${D.main};--s:${D.soft}">
-  ${D.watermark && shop.logo ? `<img class="wm" src="${esc(shop.logo)}" alt="">` : ''}
+  ${D.watermark && imgSrc(shop.logo) ? `<img class="wm" src="${esc(imgSrc(shop.logo))}" alt="">` : ''}
   ${head(b, t, f, D)}
   ${custRow(b, t, f, D)}
   <table class="items"><thead><tr>${cols.map((c) => `<th class="${c[3]}">${c[1]}</th>`).join('')}</tr></thead>

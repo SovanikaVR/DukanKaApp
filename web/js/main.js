@@ -1,5 +1,5 @@
 /* DukanKaApp — router and app shell. */
-import { apiUrl, token, onSessionExpired } from './api.js';
+import { apiUrl, token, onSessionExpired, wipeLocal } from './api.js';
 import { S, refresh, modOn, isOwner, isViewer, loadCached, clearCached } from './state.js';
 import { h, icon, toast, loading, go, todayStr, friendly, isSaving } from './ui.js';
 import { t, setLang, getLang } from './i18n.js';
@@ -194,7 +194,15 @@ function shell(view, name) {
   return h('div', { class: 'layout' }, nav, h('div', { class: 'content' }, view));
 }
 
-onSessionExpired(() => { S.user = null; clearCached(); go('login'); });
+// Fonts load after the first screen is drawn: a slow network never keeps the app blank (system font until then).
+window.addEventListener('load', () => {
+  const l = document.createElement('link');
+  l.rel = 'stylesheet';
+  l.href = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Devanagari:wght@400;500;600&display=swap';
+  document.head.appendChild(l);
+});
+
+onSessionExpired(() => { S.user = null; clearCached(); wipeLocal(); go('login'); });
 window.addEventListener('hashchange', render);
 
 // A screen was shown from the phone's saved copy and fresher data just arrived: redraw it,

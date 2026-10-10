@@ -60,7 +60,20 @@ function colLetter_(n) {
 }
 
 /** All rows of a sheet as objects (cached for this request). */
+function cellText_(v) {
+  if (v instanceof Date) v = Utilities.formatDate(v, tz_(), 'yyyy-MM-dd');
+  v = v === null || v === undefined ? '' : String(v);
+  if (v.charAt(0) === "'" && v.charAt(1) === '=') v = v.slice(1);
+  return v;
+}
+function rowObj_(headers, vals, rowNum) {
+  var o = { _row: rowNum };
+  for (var j = 0; j < headers.length; j++) o[headers[j]] = cellText_(vals[j]);
+  return o;
+}
+
 function rows_(name) {
+  _touched[name] = 1;
   if (_rowsCache[name]) return _rowsCache[name];
   var sh = sheet_(name);
   var headers = SCHEMA[name];
@@ -69,22 +82,106 @@ function rows_(name) {
   _rawCount[name] = Math.max(last - 1, 0);
   if (last >= 2) {
     var vals = sh.getRange(2, 1, last - 1, headers.length).getValues();
-    for (var i = 0; i < vals.length; i++) {
-      var o = { _row: i + 2 };
-      for (var j = 0; j < headers.length; j++) {
-        var v = vals[i][j];
-        if (v instanceof Date) v = Utilities.formatDate(v, tz_(), 'yyyy-MM-dd');
-        v = v === null || v === undefined ? '' : String(v);
-        if (v.charAt(0) === "'" && v.charAt(1) === '=') v = v.slice(1);
-        o[headers[j]] = v;
-      }
-      out.push(o);
-    }
+    for (var i = 0; i < vals.length; i++) out.push(rowObj_(headers, vals[i], i + 2));
   }
   // Cancelled cash entries and loan payments stay in the sheet for history but count nowhere.
   if (name === 'Cash' || name === 'LoanTxns') out = out.filter(function (o) { return o.status !== 'void'; });
   _rowsCache[name] = out;
   return out;
+}
+
+/* ---------- Reading only what is needed ("index" reads) ----------
+ * Big tabs are the slow part of Google Sheets. To find a customer's bills or one day's cash entries, read ONE column
+ * (the customer id or the date), pick the matching rows, and read only those rows. If the matches are spread over
+ * too many places, one full read is cheaper, and that is used instead. */
+var READ_CALL_CELLS = 5000; // one extra Sheets call costs about as much as reading this many cells
+
+function rowsMatching_(name, colName, test) {
+  _touched[name] = 1;
+  var cached = _rowsCache[name];
+  if (cached) return cached.filter(function (r) { return test(r[colName]); });
+  var headers = SCHEMA[name];
+  var ci = headers.indexOf(colName);
+  if (ci < 0) throw new Error('No column ' + colName + ' in ' + name);
+  var sh = sheet_(name);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var n = last - 1;
+  var col = sh.getRange(2, ci + 1, n, 1).getValues();
+  var hits = [];
+  for (var i = 0; i < n; i++) if (test(cellText_(col[i][0]))) hits.push(i);
+  if (!hits.length) return [];
+  var runs = [];
+  hits.forEach(function (i) {
+    var r = runs[runs.length - 1];
+    if (r && i <= r.end + 3) r.end = i; else runs.push({ start: i, end: i }); // small gaps: read through them
+  });
+  var runCells = runs.reduce(function (a, r) { return a + (r.end - r.start + 1); }, 0) * headers.length;
+  if (runs.length * READ_CALL_CELLS + runCells >= n * headers.length + READ_CALL_CELLS) {
+    return rows_(name).filter(function (r) { return test(r[colName]); });
+  }
+  var out = [];
+  runs.forEach(function (r) {
+    var vals = sh.getRange(r.start + 2, 1, r.end - r.start + 1, headers.length).getValues();
+    for (var k = 0; k < vals.length; k++) {
+      var o = rowObj_(headers, vals[k], r.start + 2 + k);
+      if (test(o[colName])) out.push(o);
+    }
+  });
+  if (name === 'Cash' || name === 'LoanTxns') out = out.filter(function (o) { return o.status !== 'void'; });
+  return out;
+}
+
+/** Only some columns of every row (e.g. date, amount for a running balance): far fewer cells than the whole tab. */
+var _colsCache = {};
+function readCols_(name, cols) {
+  _touched[name] = 1;
+  var headers = SCHEMA[name];
+  if (_rowsCache[name]) return _rowsCache[name];
+  var ck = name + '|' + cols.join(',') + '|' + (_rawCount[name] || '');
+  if (_colsCache[ck]) return _colsCache[ck];
+  var sh = sheet_(name);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var n = last - 1;
+  var idx = cols.map(function (c) { var i = headers.indexOf(c); if (i < 0) throw new Error('No column ' + c); return i; }).sort(function (a, b) { return a - b; });
+  // contiguous groups of columns, one read each
+  var groups = [];
+  idx.forEach(function (i) { var g = groups[groups.length - 1]; if (g && i === g.end + 1) g.end = i; else groups.push({ start: i, end: i }); });
+  var out = [];
+  for (var r = 0; r < n; r++) out.push({ _row: r + 2 });
+  groups.forEach(function (g) {
+    var vals = sh.getRange(2, g.start + 1, n, g.end - g.start + 1).getValues();
+    for (var r2 = 0; r2 < n; r2++) for (var c = g.start; c <= g.end; c++) out[r2][headers[c]] = cellText_(vals[r2][c - g.start]);
+  });
+  if ((name === 'Cash' || name === 'LoanTxns') && cols.indexOf('status') >= 0) out = out.filter(function (o) { return o.status !== 'void'; });
+  _colsCache[ck] = out;
+  return out;
+}
+
+/** The newest n rows of a tab (tabs are filled from the bottom, so these are the latest entries). */
+function tailRows_(name, n) {
+  _touched[name] = 1;
+  if (_rowsCache[name]) return _rowsCache[name].slice(-n);
+  var headers = SCHEMA[name];
+  var sh = sheet_(name);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  var start = Math.max(2, last - n + 1);
+  var vals = sh.getRange(start, 1, last - start + 1, headers.length).getValues();
+  var out = vals.map(function (v, i) { return rowObj_(headers, v, start + i); });
+  if (name === 'Cash' || name === 'LoanTxns') out = out.filter(function (o) { return o.status !== 'void'; });
+  return out;
+}
+
+/* Which tabs this request read and wrote: the read cache keeps an answer until one of ITS tabs changes. */
+var _touched = {}, _written = {};
+function markWritten_(name, keys) {
+  _colsCache = {};
+  // Bill / tag counters live in Settings but no screen depends on them: they don't make every screen re-read.
+  if (name === 'Settings' && keys && keys.every(function (k) { return String(k).indexOf('counter_') === 0; })) return;
+  if (name === 'Audit') return;
+  _written[name] = 1;
 }
 
 function toCell_(v) {
@@ -98,6 +195,7 @@ function toCell_(v) {
 
 /** Appends one record. Missing fields become blank. Returns the record. */
 function insert_(name, obj) {
+  markWritten_(name, name === 'Settings' ? [obj.key] : null);
   var headers = SCHEMA[name];
   var row = headers.map(function (h) { return toCell_(obj[h]); });
   var sh = sheet_(name);
@@ -116,6 +214,7 @@ function insert_(name, obj) {
 /** Appends many records with one write (much faster than one by one). */
 function insertMany_(name, objs) {
   if (!objs.length) return;
+  markWritten_(name, name === 'Settings' ? objs.map(function (o) { return o.key; }) : null);
   if (objs.length === 1) { insert_(name, objs[0]); return; }
   var headers = SCHEMA[name];
   var sh = sheet_(name);
@@ -127,6 +226,7 @@ function insertMany_(name, objs) {
 
 /** Updates fields of the record whose first column equals id. */
 function update_(name, id, patch) {
+  markWritten_(name, name === 'Settings' ? [id] : null);
   var headers = SCHEMA[name];
   var list = _rowsCache[name];
   var rec = null;
@@ -154,10 +254,13 @@ function update_(name, id, patch) {
   return merged;
 }
 
+var _findCount = {};
 function find_(name, id) {
   var key = SCHEMA[name][0];
-  if (!_rowsCache[name]) {
-    // Index lookup: find the one row by its id instead of reading the whole sheet.
+  _findCount[name] = (_findCount[name] || 0) + 1;
+  // A few lookups: find the one row by its id (fast on big sheets). Many lookups in one request (a list that
+  // needs every customer's name): one read of the whole tab is far cheaper than hundreds of searches.
+  if (!_rowsCache[name] && _findCount[name] <= 3) {
     var one = findRowById_(name, id);
     if (one !== undefined) return one;
   }
@@ -168,6 +271,7 @@ function find_(name, id) {
 
 /** Reads one record by id with Google's TextFinder (fast on big sheets). undefined = could not use it. */
 function findRowById_(name, id) {
+  _touched[name] = 1;
   if (id === undefined || id === null || id === '') return null;
   try {
     var sh = sheet_(name);
@@ -272,6 +376,7 @@ function settings_() {
 function setSettings_(map) {
   var keys = Object.keys(map);
   if (!keys.length) return;
+  markWritten_('Settings', keys);
   var list = rows_('Settings');
   var byKey = {};
   list.forEach(function (r) { byKey[r.key] = r; });
